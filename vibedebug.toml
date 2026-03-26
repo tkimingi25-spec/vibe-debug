@@ -1,0 +1,9 @@
+[project]
+name = "vibe-debug"
+
+[tracer]
+otlp_endpoint = "http://localhost:6006/v1/traces"
+
+[watch]
+modules = ["tests.mock_pipeline"]
+ignore_functions = ["__init__", "__repr__", "__str__"]

@@ -1,0 +1,8 @@
+arize-phoenix
+opentelemetry-sdk
+opentelemetry-exporter-otlp
+mcp[cli]
+httpx
+pytest
+python-dotenv
+fastmcp
