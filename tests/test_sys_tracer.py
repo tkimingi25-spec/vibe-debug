@@ -13,7 +13,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 QUERY = """
 { projects { edges { node {
-    spans(first: 20, sort: {col: startTime, dir: desc}) {
+    spans(first: 100, sort: {col: startTime, dir: desc}) {
         edges { node { name statusCode attributes } }
     }
 } } } }
@@ -119,6 +119,8 @@ def test_universal_tracer_captures_project_functions():
                 else attrs_raw
             )
             attrs = flatten_attrs(attrs_parsed)
+            if attrs.get("vibe.type") != "auto_traced":
+                continue
             found[node["name"]] = {
                 "status": node["statusCode"],
                 "file": attrs.get("vibe.file", "unknown"),

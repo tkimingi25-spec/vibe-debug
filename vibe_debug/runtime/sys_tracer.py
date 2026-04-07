@@ -63,6 +63,34 @@ class RelevanceFilter:
         if function_name.startswith("__") and function_name.endswith("__"):
             return False
 
+        if len(function_name) < 4:
+            return False
+
+        PATH_UTILITY_NAMES = {
+            "join", "split", "dirname", "basename", "abspath",
+            "relpath", "normcase", "normpath", "splitdrive",
+            "splitext", "expanduser", "expandvars", "realpath",
+            "_get_bothseps", "isabs", "isfile", "isdir", "exists",
+            "getcwd", "getenv", "strip", "lstrip", "rstrip",
+            "encode", "decode", "format", "replace", "find",
+            "get", "update", "items", "keys", "values",
+            "reset", "clear", "copy", "pop", "append",
+            "extend", "insert", "remove", "index", "count",
+            "check_str", "encodekey", "write", "read", "close",
+            "flush", "seek", "tell", "truncate", "readline",
+            "readlines",
+        }
+        if function_name in PATH_UTILITY_NAMES:
+            return False
+
+        stdlib_subdirs = {
+            "ntpath", "posixpath", "genericpath", "pathlib",
+            "os", "sys", "io", "abc", "functools",
+        }
+        path_parts = set(filename.replace("\\", "/").split("/"))
+        if path_parts & stdlib_subdirs:
+            return False
+
         return True
 
 

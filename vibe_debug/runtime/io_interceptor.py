@@ -113,61 +113,106 @@ class IOInterceptor:
 
     def _patch_socket(self) -> bool:
         """
-        Patch socket.create_connection() as universal TCP fallback.
+        Patch socket.connect() as universal TCP fallback.
         Captures any outbound TCP connection regardless of library.
         Does NOT patch Phoenix's own OTLP connection to avoid loops.
         """
         try:
-            original_create_connection = socket.create_connection
+            original_connect = socket.socket.connect
             interceptor = self
+            tracer = self._tracer
+            interceptor._network_calls = getattr(
+                interceptor, "_network_calls", 0
+            )
 
-            @functools.wraps(original_create_connection)
-            def patched_create_connection(address, timeout=None,
-                                         source_address=None, *args,
-                                         **kwargs):
-                host, port = address[0], address[1]
+            @functools.wraps(original_connect)
+            def patched_connect(sock_self, address):
+                host = address[0] if address else "unknown"
+                port = address[1] if len(address) > 1 else 0
 
-                if port in (6006, 4317):
-                    return original_create_connection(
-                        address, timeout, source_address,
-                        *args, **kwargs
-                    )
-
-                with interceptor._tracer.start_as_current_span(
-                    "tcp.connect"
-                ) as span:
+                with tracer.start_as_current_span("tcp.connect") as span:
                     span.set_attribute("vibe.type", "network")
-                    span.set_attribute("net.host", host)
-                    span.set_attribute("net.port", port)
+                    span.set_attribute("tcp.host", str(host))
+                    span.set_attribute("tcp.port", int(port))
                     span.set_attribute(
-                        "net.address", f"{host}:{port}"
+                        "tcp.destination", f"{host}:{port}"
                     )
 
-                    start = time.time()
+                    SERVICE_PORTS = {
+                        7687: "neo4j",
+                        27017: "mongodb",
+                        6379: "redis",
+                        5432: "postgresql",
+                        3306: "mysql",
+                        9200: "elasticsearch",
+                        6006: "phoenix",
+                        11434: "ollama",
+                        8080: "http-alt",
+                        443: "https",
+                        80: "http",
+                    }
+                    service = SERVICE_PORTS.get(int(port), "unknown")
+                    if service != "unknown":
+                        span.set_attribute("tcp.service", service)
+
+                    if host in ("localhost", "127.0.0.1") and \
+                       int(port) in (6006, 4317):
+                        span.set_attribute("tcp.excluded", True)
+                        return original_connect(sock_self, address)
+
                     try:
-                        conn = original_create_connection(
-                            address, timeout, source_address,
-                            *args, **kwargs
-                        )
-                        elapsed = (time.time() - start) * 1000
-                        span.set_attribute("net.latency_ms", elapsed)
+                        result = original_connect(sock_self, address)
                         span.set_status(Status(StatusCode.OK))
-                        interceptor._call_count += 1
-                        return conn
-                    except Exception as e:
-                        elapsed = (time.time() - start) * 1000
-                        span.set_attribute("net.latency_ms", elapsed)
+                        span.set_attribute("tcp.status", "connected")
+                        interceptor._network_calls += 1
+                        return result
+
+                    except ConnectionRefusedError as e:
+                        span.set_status(
+                            Status(
+                                StatusCode.ERROR,
+                                f"Connection refused to {host}:{port}"
+                            )
+                        )
+                        span.set_attribute(
+                            "error.type", "ConnectionRefusedError"
+                        )
+                        span.set_attribute(
+                            "tcp.hint",
+                            f"Service at {host}:{port} is not running. "
+                            f"Service: {service}"
+                        )
                         span.record_exception(e)
+                        interceptor._network_calls += 1
                         span.set_status(
                             Status(StatusCode.ERROR, str(e))
                         )
                         raise
 
-            socket.create_connection = patched_create_connection
+                    except OSError as e:
+                        span.set_status(
+                            Status(StatusCode.ERROR, str(e))
+                        )
+                        span.set_attribute("error.type", type(e).__name__)
+                        span.set_attribute("tcp.error_code", e.errno or 0)
+                        span.record_exception(e)
+                        interceptor._network_calls += 1
+                        raise
+
+                    except Exception as e:
+                        span.set_status(
+                            Status(StatusCode.ERROR, str(e))
+                        )
+                        span.set_attribute("error.type", type(e).__name__)
+                        span.record_exception(e)
+                        interceptor._network_calls += 1
+                        raise
+
+            socket.socket.connect = patched_connect
             self._active_patches.append(
                 lambda: setattr(
-                    socket, "create_connection",
-                    original_create_connection
+                    socket.socket, "connect",
+                    original_connect
                 )
             )
             return True
