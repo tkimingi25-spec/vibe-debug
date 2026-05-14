@@ -16,6 +16,7 @@ def start(
     config_path: str = "vibedebug.toml",
     project_root: str = None,
     universal_trace: bool = False,
+    patch_socket: bool = False,
 ):
     """
     One-line entry point for vibe-debug.
@@ -62,7 +63,7 @@ def start(
         print("[vibe-debug] Universal runtime tracing enabled")
 
     io_interceptor = IOInterceptor(project_name=config.project_name)
-    io_interceptor.start()
+    io_interceptor.start(patch_socket=patch_socket)
 
     instrument_all_adapters()
 

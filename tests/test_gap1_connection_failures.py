@@ -38,7 +38,7 @@ def test_tcp_connection_failure_captured_as_error_span():
     """
     init_vibedebug("gap1-test")
     interceptor = IOInterceptor(project_name="gap1-test")
-    interceptor.start()
+    interceptor.start(patch_socket=True)
 
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -105,7 +105,7 @@ def test_connection_failure_shows_which_service_was_unreachable():
     """
     init_vibedebug("gap1-service-test")
     interceptor = IOInterceptor(project_name="gap1-service-test")
-    interceptor.start()
+    interceptor.start(patch_socket=True)
 
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

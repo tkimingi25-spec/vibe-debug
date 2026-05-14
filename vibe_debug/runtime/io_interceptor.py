@@ -28,23 +28,23 @@ class IOInterceptor:
         )
         self._active_patches = []
         self._call_count = 0
+        self._active = False
 
-    def start(self) -> dict:
-        """
-        Activate all available interceptors.
-        Returns dict of what was patched successfully.
-        """
-        results = {}
-        results["requests"] = self._patch_requests()
-        results["httpx"] = self._patch_httpx()
-        results["socket"] = self._patch_socket()
+    def start(self, patch_socket: bool = False):
+        if self._active:
+            return
+        self._active = True
+        patched = []
 
-        active = [k for k, v in results.items() if v]
-        print(
-            f"[vibe-debug] I/O interceptor active: "
-            f"{', '.join(active)}"
-        )
-        return results
+        if self._patch_requests():
+            patched.append("requests")
+        if self._patch_httpx():
+            patched.append("httpx")
+        if patch_socket and self._patch_socket():
+            patched.append("socket")
+
+        label = ", ".join(patched) if patched else "none"
+        print(f"[vibe-debug] I/O interceptor active: {label}")
 
     def stop(self):
         """Restore all original functions."""
