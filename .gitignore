@@ -4,3 +4,4 @@
 python_modules
 __pycache__
 .pytest_cache
+.vibe_pipeline_cache.json
