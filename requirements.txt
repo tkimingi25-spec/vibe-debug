@@ -1,8 +1,10 @@
 arize-phoenix
 opentelemetry-sdk
-opentelemetry-exporter-otlp
+opentelemetry-exporter-otlp-proto-http
 mcp[cli]
 httpx
 pytest
+pytest-asyncio
 python-dotenv
 fastmcp
+wrapt

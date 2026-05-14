@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vibe-debug"
+version = "0.1.0"
+description = "Universal AI pipeline observability for vibe coders - offline-first, zero API keys"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.11"
+keywords = [
+    "observability",
+    "opentelemetry",
+    "mcp",
+    "debugging",
+    "ai",
+    "pipeline",
+]
+dependencies = [
+    "arize-phoenix",
+    "opentelemetry-sdk",
+    "opentelemetry-exporter-otlp-proto-http",
+    "mcp[cli]",
+    "httpx",
+    "wrapt",
+    "python-dotenv",
+    "fastmcp",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+]
+
+[project.urls]
+Repository = "https://github.com/tkimingi25-spec/vibe-debug"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["vibe_debug*", "server*"]

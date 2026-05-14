@@ -27,7 +27,7 @@ The goal is simple: when something breaks, your IDE can tell you what failed, wh
 ## Quick Start
 
 ```bash
-pip install arize-phoenix opentelemetry-sdk opentelemetry-exporter-otlp-proto-http mcp httpx wrapt
+pip install .
 ```
 
 ```bash
@@ -156,10 +156,11 @@ What each section means:
 - Main packages used in this repo:
   - `arize-phoenix`
   - `opentelemetry-sdk`
-  - `opentelemetry-exporter-otlp`
+  - `opentelemetry-exporter-otlp-proto-http`
   - `mcp[cli]`
   - `httpx`
   - `pytest`
+  - `pytest-asyncio`
   - `python-dotenv`
   - `fastmcp`
   - `wrapt`
