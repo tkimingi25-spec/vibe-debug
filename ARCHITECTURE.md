@@ -57,6 +57,10 @@ Step 7  -> Runtime tracer (optional)
 
 Step 8  -> I/O interceptor
           HTTP and socket interception starts automatically
+
+`@vibetrace` supports both regular and `async def` functions. Async calls are
+awaited inside the active span, so their result, duration, and any exception
+are recorded after the coroutine actually completes.
 ```
 
 ## 3. Data Flow for a Single Query

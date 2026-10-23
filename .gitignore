@@ -5,3 +5,9 @@ python_modules
 __pycache__
 .pytest_cache
 .vibe_pipeline_cache.json
+sample_app/.vibe_pipeline_cache.json
+.vibe_phoenix/
+.vibe_phoenix.pid
+*.egg-info/
+tmp/
+*.lnk

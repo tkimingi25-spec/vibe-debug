@@ -81,11 +81,10 @@ def _fetch_spans(limit: int = 20) -> list:
     if "error" in data:
         return []
     try:
-        edges = (
-            data["data"]["projects"]["edges"][0]
-            ["node"]["spans"]["edges"]
-        )
-        return [e["node"] for e in edges]
+        spans = []
+        for project in data["data"]["projects"]["edges"]:
+            spans.extend(edge["node"] for edge in project["node"]["spans"]["edges"])
+        return sorted(spans, key=lambda span: span.get("startTime", ""), reverse=True)[:limit]
     except Exception:
         return []
 

@@ -5,14 +5,14 @@ from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
 load_dotenv()
 
 _initialized = False
 
 
-class LoggingSimpleSpanProcessor(SimpleSpanProcessor):
+class LoggingBatchSpanProcessor(BatchSpanProcessor):
     def on_start(self, span, parent_context=None):
         print(f"[vibe-debug] Span started: {span.name}")
         super().on_start(span, parent_context=parent_context)
@@ -46,7 +46,12 @@ def init_vibedebug(project_name="vibe-debug"):
             endpoint=otlp_endpoint,
             headers={}
         )
-        processor = LoggingSimpleSpanProcessor(exporter)
+        processor = LoggingBatchSpanProcessor(
+            exporter,
+            export_timeout_millis=5000,
+            schedule_delay_millis=500,
+            max_export_batch_size=32,
+        )
         provider.add_span_processor(processor)
         print("[vibe-debug] Exporter registered successfully")
     except Exception as e:

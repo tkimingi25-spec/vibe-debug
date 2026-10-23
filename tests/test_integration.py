@@ -1,10 +1,11 @@
 import json
 
 import httpx
+import pytest
 
 from vibe_debug import init_vibedebug, vibetrace
 
-init_vibedebug("integration-test")
+pytestmark = pytest.mark.requires_phoenix
 
 QUERY = """
 {
@@ -60,6 +61,7 @@ def exception_func():
 
 
 def test_spans_reach_phoenix():
+    init_vibedebug("integration-test")
     test_span_names = {"success_func", "silent_failure_func", "exception_func"}
 
     assert success_func(10) == 20

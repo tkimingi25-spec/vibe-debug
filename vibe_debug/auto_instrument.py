@@ -1,5 +1,6 @@
 import importlib
 import inspect
+import sys
 
 import wrapt
 
@@ -43,7 +44,14 @@ def auto_instrument_module(module_name: str, config: VibeConfig):
     Uses wrapt to patch functions without modifying source code.
     """
     try:
-        module = importlib.import_module(module_name)
+        main_module = sys.modules.get("__main__")
+        main_file = getattr(main_module, "__file__", "")
+        if main_file and main_file.rsplit("/", 1)[-1].rsplit("\\", 1)[-1].rsplit(".", 1)[0] == module_name:
+            module = main_module
+            allowed_module_names = {module_name, "__main__"}
+        else:
+            module = importlib.import_module(module_name)
+            allowed_module_names = {module_name}
         component_type = _get_component_type(module_name)
         patched_count = 0
 
@@ -51,7 +59,7 @@ def auto_instrument_module(module_name: str, config: VibeConfig):
             if not _should_instrument(func_name, config):
                 continue
 
-            if func_obj.__module__ != module_name:
+            if func_obj.__module__ not in allowed_module_names:
                 continue
 
             if getattr(func_obj, "_vibe_debug_instrumented", False):

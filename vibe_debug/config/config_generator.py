@@ -29,7 +29,7 @@ def generate_config(
     ]
 
     entry_points_str = "\n".join(
-        [f'  "{ep}"' for ep in pipeline_map.entry_points[:5]]
+        [f'  "{ep}",' for ep in pipeline_map.entry_points[:5]]
     ) or '  "unknown - no main.py or app.py detected"'
 
     modules_str = "\n".join(
@@ -55,7 +55,7 @@ entry_points = [
 ]
 
 [watch]
-# Auto-populated from static analysis - edit to add/remove modules
+# Auto-populated from static analysis - replace test-only modules with your app modules
 modules = [
 {modules_str}
 ]

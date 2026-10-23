@@ -81,6 +81,7 @@ class PipelineDiscovery:
     """
 
     CACHE_FILENAME = ".vibe_pipeline_cache.json"
+    MAX_COMPONENTS = 500
 
     def __init__(
         self,
@@ -253,6 +254,7 @@ class PipelineDiscovery:
     def _save_cache(self):
         """Persist pipeline map to disk."""
         try:
+            self._trim_components()
             data = {
                 "project_name": self.pipeline_map.project_name,
                 "project_root": self.pipeline_map.project_root,
@@ -283,6 +285,23 @@ class PipelineDiscovery:
                 json.dump(data, f, indent=2)
         except Exception as e:
             print(f"[vibe-debug] Cache save failed: {e}")
+
+    def _trim_components(self):
+        """Keep the persistent map bounded by evicting least-observed entries."""
+        overflow = len(self.pipeline_map.components) - self.MAX_COMPONENTS
+        if overflow <= 0:
+            return
+        candidates = sorted(
+            self.pipeline_map.components.values(),
+            key=lambda component: (
+                component.times_called,
+                component.times_failed,
+                component.name,
+            ),
+        )
+        for component in candidates[:overflow]:
+            del self.pipeline_map.components[component.name]
+        print(f"[vibe-debug] Cache capped at {self.MAX_COMPONENTS} components")
 
     def _load_cache(self):
         """Load persisted pipeline map from disk if it exists."""

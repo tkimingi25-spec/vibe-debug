@@ -3,14 +3,14 @@
 ## Phase 1 — Core Pipeline (Complete)
 
 ### What Was Built
-- OpenTelemetry `TracerProvider` with `SimpleSpanProcessor`
+- OpenTelemetry `TracerProvider` with a bounded `BatchSpanProcessor`
 - `OTLPSpanExporter` sending spans to Arize Phoenix on `localhost:6006`
 - `@vibetrace` decorator with silent failure detection
 - MCP bridge with `get_last_failure()` and `explain_trace()`
 - Phoenix GraphQL integration for reading spans back
 
 ### Key Technical Decisions
-- `SimpleSpanProcessor` over `BatchSpanProcessor`: synchronous export removes flush timing bugs and makes tests predictable
+- `BatchSpanProcessor` with a five-second export timeout: exports never block application calls while Phoenix is unavailable
 - GraphQL over REST: Phoenix read-path GraphQL queries have been stable in this repo, while `/v1/spans` was not the right read endpoint
 - `flatten_attrs()` helper: Phoenix returns nested attributes, so readers flatten before lookup
 - `sort: {col: startTime, dir: desc}`: newest spans first avoids stale test results
@@ -254,10 +254,10 @@ Total automated tests: 22
 
 ## What Is Not Yet Built
 
-### Week 4 — AI Explanation Layer (Planned)
+### Week 4 — AI Explanation Layer (Complete)
 - `why_did_this_fail()` MCP tool
 - `suggest_fix()` MCP tool
-- tighter noise filtering for runtime tracing
+- failure-pattern detection and attribute flattening helpers
 
 ### Phase 3 — Universal Release (Planned)
 - full packaging metadata for `pip install vibe-debug`

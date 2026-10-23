@@ -1,0 +1,9 @@
+[project]
+name = "vibe-debug-sample"
+
+[tracer]
+otlp_endpoint = "http://localhost:6006/v1/traces"
+
+[watch]
+modules = ["retriever", "processor", "generator"]
+ignore_functions = ["__init__", "__repr__", "__str__"]

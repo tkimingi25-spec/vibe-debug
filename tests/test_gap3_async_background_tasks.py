@@ -8,6 +8,8 @@ from vibe_debug.decorators import vibetrace
 from vibe_debug.runtime.sys_tracer import UniversalRuntimeTracer
 import os
 
+pytestmark = pytest.mark.requires_phoenix
+
 PROJECT_ROOT = os.path.dirname(
     os.path.dirname(os.path.abspath(__file__))
 )
@@ -79,23 +81,22 @@ async def test_async_function_captured_as_span():
 async def test_background_task_captured():
     """
     asyncio.create_task() spawns background workers.
-    In your project, the updater and ikr_learn run as
-    background tasks. These must be captured even when
-    they run independently of the main request path.
+    These must be captured even when they run independently
+    of the main request path.
     """
     init_vibedebug("gap3-background-test")
 
     results = []
 
     @vibetrace(component_type="background")
-    async def background_ikr_update(data: str) -> str:
-        """Runs as a background task to update knowledge."""
+    async def background_pipeline_update(data: str) -> str:
+        """Runs as a background task to process updates."""
         await asyncio.sleep(0.05)
         results.append(data)
         return f"processed: {data}"
 
     task = asyncio.create_task(
-        background_ikr_update("new_knowledge_node")
+        background_pipeline_update("new_data_node")
     )
     await task
 
@@ -114,7 +115,7 @@ async def test_background_task_captured():
 
     bg_spans = [
         e["node"] for e in spans
-        if e["node"]["name"] == "background_ikr_update"
+        if e["node"]["name"] == "background_pipeline_update"
     ]
 
     assert len(bg_spans) > 0, (

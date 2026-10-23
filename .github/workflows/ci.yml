@@ -17,7 +17,15 @@ jobs:
       - run: python -m pip install --upgrade pip
       - run: pip install -e ".[dev]"
       - run: python -m phoenix.server.main serve > phoenix.log 2>&1 &
-      - run: sleep 10
+      - name: Wait for Phoenix
+        run: |
+          for i in $(seq 1 60); do
+            curl -sf http://localhost:6006/healthz && echo "Phoenix ready" && exit 0
+            sleep 1
+          done
+          echo "Phoenix failed to start" && exit 1
+      - run: vibe-debug --help
+      - run: vibe-debug doctor
       - run: pytest tests/ -v
       - if: failure()
         run: cat phoenix.log

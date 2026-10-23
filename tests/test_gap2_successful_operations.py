@@ -4,6 +4,8 @@ import pytest
 from vibe_debug.tracer import init_vibedebug
 from vibe_debug.decorators import vibetrace
 
+pytestmark = pytest.mark.requires_phoenix
+
 QUERY = """
 { projects { edges { node {
     spans(first: 30, sort: {col: startTime, dir: desc}) {

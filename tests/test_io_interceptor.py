@@ -59,6 +59,7 @@ def test_interceptor_patches_available_libraries():
     print("\nIOInterceptor patches available libraries")
 
 
+@pytest.mark.requires_phoenix
 def test_interceptor_captures_http_call_as_span():
     """
     Make a real HTTP call while interceptor is active.
@@ -130,6 +131,7 @@ def test_interceptor_captures_http_call_as_span():
     print("\nHTTP call captured as span without any adapter")
 
 
+@pytest.mark.requires_phoenix
 def test_interceptor_skips_phoenix_calls():
     """
     Interceptor must never create spans for Phoenix OTLP calls.

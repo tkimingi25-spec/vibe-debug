@@ -29,22 +29,29 @@ class IOInterceptor:
         self._active_patches = []
         self._call_count = 0
         self._active = False
+        self._patch_results = {}
 
-    def start(self, patch_socket: bool = False):
+    def start(self, patch_socket: bool = True):
         if self._active:
-            return
+            return self._patch_results.copy()
         self._active = True
         patched = []
+        results = {}
 
-        if self._patch_requests():
+        results["requests"] = self._patch_requests()
+        if results["requests"]:
             patched.append("requests")
-        if self._patch_httpx():
+        results["httpx"] = self._patch_httpx()
+        if results["httpx"]:
             patched.append("httpx")
-        if patch_socket and self._patch_socket():
+        results["socket"] = patch_socket and self._patch_socket()
+        if results["socket"]:
             patched.append("socket")
 
         label = ", ".join(patched) if patched else "none"
         print(f"[vibe-debug] I/O interceptor active: {label}")
+        self._patch_results = results
+        return results
 
     def stop(self):
         """Restore all original functions."""
@@ -54,6 +61,8 @@ class IOInterceptor:
             except Exception:
                 pass
         self._active_patches.clear()
+        self._active = False
+        self._patch_results = {}
         print(
             f"[vibe-debug] I/O interceptor stopped - "
             f"{self._call_count} network calls captured"
