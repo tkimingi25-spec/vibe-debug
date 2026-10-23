@@ -208,6 +208,25 @@ Once registered, you can ask in the IDE chat:
 
 ---
 
+## Beyond AI: Factory Chains & Sequential Protocols
+
+While `vibe-debug` was designed with AI pipelines in mind, its underlying architecture is a general **Directed Acyclic Graph (DAG) with step-by-step state observation**. This allows `vibe-debug` to be applied to any sequential process, manufacturing pipeline, or industrial factory chain operation:
+
+| `vibe-debug` Concept | AI Pipeline Equivalent | Factory Chain Equivalent |
+|---|---|---|
+| **Pipeline Map (`map`)** | Import graph (`retriever` ➔ `processor` ➔ `generator`) | Assembly line blueprint (Station 1 ➔ Station 2 ➔ Station 3) |
+| **Span / Trace** | Single query execution | Single product / serial number moving down the line |
+| **Span Attributes** | Query text, retrieved document count | Serial number, sensor readings, dimensions, batch ID |
+| **Latency Tracking** | Model inference time (ms) | Cycle time / machine operation duration (ms) |
+| **Silent Failure** | Function returned `None` or `[]` | Defective unit produced with missing parts, or empty packaging |
+| **Downstream Never Reached** | Generator was skipped because retriever crashed | Packaging station is idle because upstream Welder faulted |
+| **I/O Interception** | Outbound HTTP / socket calls | Sensor telemetry, PLC communication (MQTT, Modbus, TCP sockets) |
+| **MCP AI Assistant** | *"Why did query #44 fail?"* | *"Why did line 2 stop on Batch 902?"* |
+
+Because `vibe-debug` uses standard OpenTelemetry spans, it is protocol-agnostic and works for any sequential operation where stations transform payloads, experience latency, or risk cascading failures.
+
+---
+
 ## Manual Decoration (Optional)
 
 If you prefer explicit decoration over zero-config auto-instrumentation, use `@vibetrace`:
