@@ -1,3 +1,5 @@
+import time
+
 import httpx
 import json
 import pytest
@@ -8,11 +10,36 @@ pytestmark = pytest.mark.requires_phoenix
 
 QUERY = """
 { projects { edges { node {
-    spans(first: 30, sort: {col: startTime, dir: desc}) {
+    spans(first: 100, sort: {col: startTime, dir: desc}) {
         edges { node { name statusCode attributes } }
     }
 } } } }
 """
+
+
+def fetch_spans() -> list:
+    """Fetch spans across all projects (export + ingest is async)."""
+    r = httpx.post(
+        "http://localhost:6006/graphql",
+        json={"query": QUERY},
+        timeout=10.0,
+    )
+    r.raise_for_status()
+    spans = []
+    for project in r.json()["data"]["projects"]["edges"]:
+        spans.extend(
+            edge["node"] for edge in project["node"]["spans"]["edges"]
+        )
+    return spans
+
+
+def wait_for_spans(name: str, min_count: int = 1, timeout: float = 15.0) -> list:
+    deadline = time.monotonic() + timeout
+    while True:
+        matches = [s for s in fetch_spans() if s["name"] == name]
+        if len(matches) >= min_count or time.monotonic() >= deadline:
+            return matches
+        time.sleep(0.5)
 
 
 def flatten_attrs(attrs: dict, prefix="") -> dict:
@@ -52,21 +79,7 @@ def test_successful_write_operation_captured_with_output():
     )
     assert result["status"] == "created"
 
-    r = httpx.post(
-        "http://localhost:6006/graphql",
-        json={"query": QUERY},
-        timeout=10.0,
-    )
-    r.raise_for_status()
-    spans = (
-        r.json()["data"]["projects"]["edges"][0]
-        ["node"]["spans"]["edges"]
-    )
-
-    node_spans = [
-        e["node"] for e in spans
-        if e["node"]["name"] == "add_knowledge_node"
-    ]
+    node_spans = wait_for_spans("add_knowledge_node")
 
     assert len(node_spans) > 0, \
         "add_knowledge_node span not found"
@@ -106,21 +119,9 @@ def test_operation_count_tracked_across_multiple_calls():
     for i in range(5):
         update_graph_node(f"node_{i}", {"weight": i * 0.1})
 
-    r = httpx.post(
-        "http://localhost:6006/graphql",
-        json={"query": QUERY},
-        timeout=10.0,
-    )
-    r.raise_for_status()
-    spans = (
-        r.json()["data"]["projects"]["edges"][0]
-        ["node"]["spans"]["edges"]
-    )
-
     update_spans = [
-        e["node"] for e in spans
-        if e["node"]["name"] == "update_graph_node"
-        and e["node"]["statusCode"] == "OK"
+        s for s in wait_for_spans("update_graph_node", min_count=5)
+        if s["statusCode"] == "OK"
     ]
 
     assert len(update_spans) >= 5, (

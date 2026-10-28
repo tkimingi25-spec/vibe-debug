@@ -18,20 +18,25 @@ keywords = [
     "pipeline",
 ]
 dependencies = [
-    "arize-phoenix",
-    "opentelemetry-sdk",
-    "opentelemetry-exporter-otlp-proto-http",
-    "mcp[cli]",
-    "httpx",
-    "wrapt",
-    "python-dotenv",
-    "fastmcp",
+    "arize-phoenix==13.18.0",
+    # Phoenix 13.x imports phoenix.evals.models, removed in evals 3.x;
+    # Phoenix metadata leaves evals unbounded above, so cap it here.
+    "arize-phoenix-evals~=2.12",
+    # graphql-core 3.3 removed ExecutionContext, which the
+    # strawberry-graphql version pinned by Phoenix 13.x imports.
+    "graphql-core~=3.2.0",
+    "opentelemetry-sdk~=1.45",
+    "opentelemetry-exporter-otlp-proto-http~=1.45",
+    "mcp[cli]~=1.29",
+    "httpx~=0.28",
+    "wrapt~=1.17",
+    "python-dotenv~=1.1",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pytest",
-    "pytest-asyncio",
+    "pytest~=8.4",
+    "pytest-asyncio~=1.3",
 ]
 
 [project.scripts]

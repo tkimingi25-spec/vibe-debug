@@ -42,6 +42,9 @@ cd vibe-debug
 pip install -e .
 ```
 
+Dependencies are pinned in `pyproject.toml`, which is the single source of truth.
+There is no `requirements.txt`; use `pip install -e ".[dev]"` for the test dependencies.
+
 ### 2. Start Phoenix (One-command launch)
 
 ```powershell
