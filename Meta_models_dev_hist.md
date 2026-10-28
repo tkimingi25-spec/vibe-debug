@@ -96,3 +96,14 @@ Env note: the agent's sandboxed shell cannot complete TLS through its local prox
 Status: Implemented and verified. Awaiting approval to commit + push.
 - **Files:** Changed - `pyproject.toml`, `README.md`, `tests/test_gap2_successful_operations.py`. Deleted - `requirements.txt`. Created - `tests/test_packaging.py`. Reviewed - `server/mcp_bridge.py`, `.github/workflows/ci.yml`, docs (grep). Appended - `Meta_models_dev_hist.md` (this entry).
 - **Disposition:** Fixed
+
+### 2026-10-28 - Improvement 7: Commit and push recorded
+
+- **Request / idea:** Follow-up entry recording the commit of Improvement 7 (previous entry ended at "Awaiting approval to commit + push"; approval was then given).
+- **Work done:** Committed the Improvement 7 change set and pushed to `origin/main` at https://github.com/tkimingi25-spec/vibe-debug. Commit `ea8d718` - "chore: pin dependencies and make pyproject.toml the single source (Improvement 7)" (6 files changed, 187 insertions, 50 deletions; `Meta_models_dev_hist.md` and `tests/test_packaging.py` created, `requirements.txt` deleted). Push confirmed: `7842288..ea8d718 main -> main`; working tree clean and in sync with `origin/main`.
+- **Finding:** None.
+- **Remedy / correction applied:** None.
+- **Kept:** Working tree left clean; no further code changes.
+- **Verification:** `git log --oneline -2` shows `ea8d718` on top of `7842288`; `git status -sb` reports `## main...origin/main` with no pending changes after the push.
+- **Files:** Appended - `Meta_models_dev_hist.md` (this entry).
+- **Disposition:** Fixed
