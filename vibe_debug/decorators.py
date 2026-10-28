@@ -6,6 +6,26 @@ from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
 
 
+def _is_silent_failure(result) -> bool:
+    """Return True for None and empty built-in containers/str.
+
+    Never invokes user-defined ``__eq__``/``__bool__``/``__len__`` on
+    arbitrary results, and never raises: any inspection error means
+    "not flagged". Trade-off: custom empty containers and array-like
+    types (e.g. NumPy/pandas) are no longer flagged, because detecting
+    them would require calling code that can raise (e.g. ambiguous
+    array truth value). This is deliberate.
+    """
+    try:
+        if result is None:
+            return True
+        if isinstance(result, (list, dict, str, tuple, set, frozenset)):
+            return len(result) == 0
+        return False
+    except Exception:
+        return False
+
+
 def vibetrace(component_type: str):
     """Capture inputs, outputs, failures, and timing for a function call."""
 
@@ -38,7 +58,7 @@ def vibetrace(component_type: str):
         def apply_result(span, result, execution_time):
             span.set_attribute("vibe.output", str(result))
             span.set_attribute("execution_time_ms", execution_time)
-            if result is None or result == [] or result == "" or result == {}:
+            if _is_silent_failure(result):
                 span.set_status(
                     Status(StatusCode.ERROR, description="Silent Failure detected")
                 )

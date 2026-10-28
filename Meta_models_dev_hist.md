@@ -107,3 +107,14 @@ Status: Implemented and verified. Awaiting approval to commit + push.
 - **Verification:** `git log --oneline -2` shows `ea8d718` on top of `7842288`; `git status -sb` reports `## main...origin/main` with no pending changes after the push.
 - **Files:** Appended - `Meta_models_dev_hist.md` (this entry).
 - **Disposition:** Fixed
+
+### 2026-10-28 — Improvement 2: Non-throwing silent-failure detection
+
+- **Request / idea:** Make silent-failure detection in the tracing wrapper non-throwing, so tracing a successful function can never raise because of the tracer's own inspection of its return value.
+- **Work done:** Added module-level `_is_silent_failure` in `vibe_debug/decorators.py`; replaced the single shared `result is None or result == [] or result == "" or result == {}` check in `apply_result` (used by both sync and async wrappers) with a call to it. Added `tests/test_silent_failure_non_throwing.py` (28 tests) using an in-memory span exporter; no Phoenix required for the unit tests.
+- **Finding:** The old `==` chain invoked user-defined `__eq__`, which for NumPy/pandas-style results returns a non-bool whose truth value is ambiguous, raising `ValueError` inside the wrapper after user code had already succeeded. `None` was flagged by an explicit `result is None` clause, preserved. A second copy of the chain in `vibe_debug/runtime/sys_tracer.py` is already guarded by `try/except Exception: pass`, so it cannot break user code.
+- **Remedy / correction applied:** Detection now uses identity for `None` and `isinstance` + `len()` only for built-in `list`/`dict`/`str`/`tuple`/`set`/`frozenset`; all inspection is wrapped in `try/except Exception` returning False. No user `__eq__`/`__bool__` is invoked. Recording mechanism unchanged.
+- **Kept:** `sys_tracer.py` unchanged (guarded; follow-up candidate). No NumPy/pandas dependency added. Improvement 1 not touched.
+- **Verification:** New tests 28 passed unsandboxed (26 passed + 2 async sandbox socketpair errors when sandboxed). Full suite with Phoenix healthy at localhost:6006: 71 passed (43 prior + 28 new), no regressions. Phoenix stopped; port 6006 clear.
+- **Files:** Changed — `vibe_debug/decorators.py`. Created — `tests/test_silent_failure_non_throwing.py`. Reviewed — `vibe_debug/runtime/sys_tracer.py`, `tests/conftest.py`, `tests/test_instrument.py`.
+- **Disposition:** Fixed — approved; logging + commit + push approved and carried out in this close-out.
