@@ -7,6 +7,8 @@ from typing import Optional, Set
 from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
 
+from vibe_debug.redaction import redact_value
+
 
 class RelevanceFilter:
     """
@@ -181,11 +183,11 @@ class UniversalRuntimeTracer:
 
         try:
             locals_preview = {
-                k: str(v)[:100]
+                k: v
                 for k, v in list(frame.f_locals.items())[:3]
                 if not k.startswith("_")
             }
-            input_preview = str(locals_preview)[:200]
+            input_preview = redact_value(locals_preview, max_length=200)
         except Exception:
             input_preview = ""
 
@@ -221,7 +223,9 @@ class UniversalRuntimeTracer:
             duration_ms = (time.time() - start_time) * 1000
 
             span.set_attribute("execution_time_ms", duration_ms)
-            span.set_attribute("vibe.output_preview", str(return_value)[:200])
+            span.set_attribute(
+                "vibe.output_preview", redact_value(return_value, max_length=200)
+            )
 
             if return_value is None or return_value == [] \
                     or return_value == "" or return_value == {}:

@@ -5,6 +5,8 @@ import time
 from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
 
+from vibe_debug.redaction import redact_value
+
 
 def _is_silent_failure(result) -> bool:
     """Return True for None and empty built-in containers/str.
@@ -26,19 +28,79 @@ def _is_silent_failure(result) -> bool:
         return False
 
 
-def vibetrace(component_type: str):
-    """Capture inputs, outputs, failures, and timing for a function call."""
+def _parameter_names(func):
+    """Best-effort positional parameter names; ([], None) if unknown."""
+    try:
+        params = list(inspect.signature(func).parameters.values())
+    except (TypeError, ValueError):
+        return [], None
+    names = []
+    var_positional = None
+    for param in params:
+        if param.kind is inspect.Parameter.VAR_POSITIONAL:
+            var_positional = param.name
+        elif param.kind in (
+            inspect.Parameter.POSITIONAL_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        ):
+            names.append(param.name)
+    return names, var_positional
+
+
+def vibetrace(component_type: str, config=None, *, redact_keys=(), max_attr_length=None):
+    """Capture inputs, outputs, failures, and timing for a function call.
+
+    ``vibe.input``/``vibe.output`` pass through redaction (see
+    ``vibe_debug.redaction``): key-name-based only, no content scanning,
+    so bare positional/free-text secrets are not detected.
+    ``config`` is an optional VibeConfig; its redact_keys extend the
+    defaults and its max_attr_length caps attribute length. Explicit
+    decorator arguments override the config values.
+    """
 
     def decorator(func):
+        param_names, var_positional = _parameter_names(func)
+        extra_keys = []
+        if config is not None:
+            extra_keys.extend(getattr(config, "redact_keys", ()) or ())
+        extra_keys.extend(redact_keys or ())
+        if max_attr_length is not None:
+            effective_max = max_attr_length
+        elif config is not None:
+            effective_max = getattr(config, "max_attr_length", 1024)
+        else:
+            effective_max = 1024
+
         def apply_metadata(span, args, kwargs):
             span.set_attribute("vibe.type", component_type or "unknown")
             span.set_attribute("vibe.name", func.__name__)
 
-            arg_str = ", ".join(str(arg) for arg in args)
-            kwarg_str = ", ".join(
-                f"{key}={value}" for key, value in kwargs.items()
+            parts = []
+            for index, arg in enumerate(args):
+                if index < len(param_names):
+                    name = param_names[index]
+                else:
+                    name = var_positional
+                rendered = redact_value(
+                    arg,
+                    key=name,
+                    extra_keys=extra_keys,
+                    max_length=effective_max,
+                )
+                parts.append(f"{name}={rendered}" if name else rendered)
+            for key, value in kwargs.items():
+                rendered = redact_value(
+                    value,
+                    key=key,
+                    extra_keys=extra_keys,
+                    max_length=effective_max,
+                )
+                parts.append(f"{key}={rendered}")
+            joined = ", ".join(parts)
+            span.set_attribute(
+                "vibe.input",
+                redact_value(joined, max_length=effective_max),
             )
-            span.set_attribute("vibe.input", f"{arg_str} {kwarg_str}".strip())
 
             try:
                 source_file = inspect.getfile(func)
@@ -56,7 +118,14 @@ def vibetrace(component_type: str):
                 span.set_attribute("vibe.doc", doc)
 
         def apply_result(span, result, execution_time):
-            span.set_attribute("vibe.output", str(result))
+            span.set_attribute(
+                "vibe.output",
+                redact_value(
+                    result,
+                    extra_keys=extra_keys,
+                    max_length=effective_max,
+                ),
+            )
             span.set_attribute("execution_time_ms", execution_time)
             if _is_silent_failure(result):
                 span.set_status(

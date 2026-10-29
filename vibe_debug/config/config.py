@@ -12,6 +12,10 @@ class VibeConfig:
     ignore_functions: List[str] = field(
         default_factory=lambda: ["__init__", "__repr__", "__str__"]
     )
+    # Redaction: extra sensitive keys extend (never replace) the defaults
+    # in vibe_debug.redaction; max_attr_length truncates span attributes.
+    max_attr_length: int = 1024
+    redact_keys: List[str] = field(default_factory=list)
 
 
 def load_config(config_path: str = "vibedebug.toml") -> VibeConfig:
@@ -32,4 +36,8 @@ def load_config(config_path: str = "vibedebug.toml") -> VibeConfig:
         ignore_functions=data.get("watch", {}).get(
             "ignore_functions", ["__init__", "__repr__", "__str__"]
         ),
+        max_attr_length=data.get("redaction", {}).get(
+            "max_attr_length", 1024
+        ),
+        redact_keys=data.get("redaction", {}).get("redact_keys", []),
     )
