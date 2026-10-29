@@ -129,3 +129,14 @@ Status: Implemented and verified. Awaiting approval to commit + push.
 - **Verification:** Focused run unsandboxed: `pytest tests/test_redaction.py tests/test_silent_failure_non_throwing.py tests/test_instrument.py tests/test_sys_tracer.py::test_relevance_filter_skips_libraries` — 70 passed. Full suite with Phoenix healthy at `localhost:6006` (started via `vibe-debug up`, stopped via `vibe-debug down` afterwards, port clear): `pytest tests/ -q` — 109 passed in 61.74s (71 prior + 38 new), no regressions. The shell exit-1 wrapper on those runs is PowerShell `NativeCommandError` on stderr deprecation warnings, not a pytest failure.
 - **Files:** Created — `vibe_debug/redaction.py`, `tests/test_redaction.py`. Changed — `vibe_debug/decorators.py`, `vibe_debug/config/config.py`, `vibe_debug/runtime/sys_tracer.py`. Reviewed — `tests/test_silent_failure_non_throwing.py`, `tests/test_instrument.py`, `tests/test_sys_tracer.py`, `.github/workflows/ci.yml`. Appended — `Meta_models_dev_hist.md` (this entry).
 - **Disposition:** Fixed — approved; logging + commit + push approved and carried out in this close-out.
+
+### 2026-10-29 — Improvement 1: Commit and push recorded
+
+- **Request / idea:** Follow-up entry recording the commit of Improvement 1 (previous entry ended at approval to commit + push; approval was then given with "commit and push").
+- **Work done:** Committed the Improvement 1 change set and pushed to `origin/main` at https://github.com/tkimingi25-spec/vibe-debug. Commit `36c94c1` — "feat(redaction): redact and truncate span attributes (Improvement 1)" (6 files changed, 517 insertions, 10 deletions; `vibe_debug/redaction.py` and `tests/test_redaction.py` created). Push confirmed: `b9d7b21..36c94c1 main -> main`; working tree clean and in sync with `origin/main`.
+- **Finding:** None.
+- **Remedy / correction applied:** None.
+- **Kept:** Working tree left clean; no further code changes.
+- **Verification:** `git log --oneline -2` shows `36c94c1` on top of `b9d7b21`; `git status -sb` reports `## main...origin/main` with no pending changes after the push.
+- **Files:** Appended — `Meta_models_dev_hist.md` (this entry).
+- **Disposition:** Fixed
