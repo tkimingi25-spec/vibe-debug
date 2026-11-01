@@ -6,6 +6,7 @@ from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
 
 from vibe_debug.redaction import redact_value
+from vibe_debug.tracer import get_active_tracer
 
 
 def _is_silent_failure(result) -> bool:
@@ -149,7 +150,7 @@ def vibetrace(component_type: str, config=None, *, redact_keys=(), max_attr_leng
 
         @functools.wraps(func)
         async def async_wrapper(*args, **kwargs):
-            tracer = trace.get_tracer(__name__)
+            tracer = get_active_tracer(__name__)
             with tracer.start_as_current_span(func.__name__) as span:
                 apply_metadata(span, args, kwargs)
                 started_at = time.time()
@@ -163,7 +164,7 @@ def vibetrace(component_type: str, config=None, *, redact_keys=(), max_attr_leng
 
         @functools.wraps(func)
         def sync_wrapper(*args, **kwargs):
-            tracer = trace.get_tracer(__name__)
+            tracer = get_active_tracer(__name__)
             with tracer.start_as_current_span(func.__name__) as span:
                 apply_metadata(span, args, kwargs)
                 started_at = time.time()

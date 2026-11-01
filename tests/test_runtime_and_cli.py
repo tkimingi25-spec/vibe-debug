@@ -60,6 +60,7 @@ def test_tracer_uses_bounded_batch_exporting(monkeypatch):
     processor = MagicMock()
     monkeypatch.setattr(tracer_module, "_initialized", False)
     monkeypatch.setattr(tracer_module, "_health_exporter", None)
+    monkeypatch.setattr(tracer_module, "_provider", None)
     with (
         patch.object(tracer_module, "OTLPSpanExporter", return_value=exporter),
         patch.object(tracer_module, "BatchSpanProcessor", return_value=processor) as factory,

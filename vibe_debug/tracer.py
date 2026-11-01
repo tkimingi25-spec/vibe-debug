@@ -19,6 +19,8 @@ load_dotenv()
 
 _initialized = False
 _health_exporter = None
+_provider = None
+_state_lock = threading.RLock()
 
 _MAX_ERROR_LENGTH = 200
 
@@ -120,37 +122,93 @@ def get_export_health() -> dict:
     return exporter.get_export_health()
 
 
-def init_vibedebug(project_name="vibe-debug"):
-    global _initialized, _health_exporter
-    if _initialized:
-        return trace.get_tracer(__name__)
+def current_provider():
+    """Return the provider stored by ``init_vibedebug``, or None."""
+    return _provider
 
-    otlp_endpoint = os.getenv("OTLP_ENDPOINT", DEFAULT_OTLP_ENDPOINT)
 
-    print(f"[vibe-debug] Initializing tracer -> {otlp_endpoint}")
+def get_active_tracer(name=None):
+    """Return a tracer from the currently stored provider, if any.
 
-    resource = Resource(attributes={"service.name": project_name})
-    provider = TracerProvider(resource=resource)
+    OpenTelemetry's global provider can be set only once per process,
+    so after a reset + re-initialisation the global provider still
+    points at the first provider. Vibe-Debug's own acquisition path
+    therefore prefers the stored provider: while a stored provider is
+    active, spans through this function go through it (genuinely, via
+    its own processors/exporters). With no stored provider, falls back
+    to the OpenTelemetry global provider. Third-party code holding
+    tracers from ``trace.get_tracer()`` is unaffected and keeps the
+    first global provider.
+    """
+    provider = _provider
+    if provider is not None:
+        return provider.get_tracer(name or __name__)
+    return trace.get_tracer(name or __name__)
 
-    try:
-        exporter = HealthRecordingExporter(
-            OTLPSpanExporter(
-                endpoint=otlp_endpoint,
-                headers={}
+
+def reset_tracer():
+    """Shut down and clear the current tracer state. Harmless no-op
+    when never initialised, and safe to call repeatedly.
+
+    After reset, ``get_export_health()`` reports the pre-initialisation
+    state, and a subsequent ``init_vibedebug(...)`` performs the full
+    setup again (new provider, exporter, and HealthRecordingExporter)
+    and genuinely serves Vibe-Debug spans through the new provider via
+    ``get_active_tracer``.
+    """
+    global _initialized, _health_exporter, _provider
+    with _state_lock:
+        provider = _provider
+        _provider = None
+        _health_exporter = None
+        _initialized = False
+        if provider is not None:
+            try:
+                provider.shutdown()
+            except Exception:
+                pass
+
+
+def init_vibedebug(project_name="vibe-debug", *, exporter=None, endpoint=None):
+    global _initialized, _health_exporter, _provider
+    with _state_lock:
+        if _initialized:
+            return get_active_tracer(__name__)
+
+        otlp_endpoint = endpoint or os.getenv(
+            "OTLP_ENDPOINT", DEFAULT_OTLP_ENDPOINT
+        )
+
+        print(f"[vibe-debug] Initializing tracer -> {otlp_endpoint}")
+
+        resource = Resource(attributes={"service.name": project_name})
+        provider = TracerProvider(resource=resource)
+        _provider = provider
+
+        try:
+            health_exporter = HealthRecordingExporter(
+                exporter
+                if exporter is not None
+                else OTLPSpanExporter(
+                    endpoint=otlp_endpoint,
+                    headers={}
+                )
             )
-        )
-        _health_exporter = exporter
-        processor = BatchSpanProcessor(
-            exporter,
-            export_timeout_millis=5000,
-            schedule_delay_millis=500,
-            max_export_batch_size=32,
-        )
-        provider.add_span_processor(processor)
-        print("[vibe-debug] Exporter registered successfully")
-    except Exception as e:
-        print(f"[vibe-debug] ERROR setting up exporter: {e}")
+            _health_exporter = health_exporter
+            processor = BatchSpanProcessor(
+                health_exporter,
+                export_timeout_millis=5000,
+                schedule_delay_millis=500,
+                max_export_batch_size=32,
+            )
+            provider.add_span_processor(processor)
+            print("[vibe-debug] Exporter registered successfully")
+        except Exception as e:
+            print(f"[vibe-debug] ERROR setting up exporter: {e}")
 
-    trace.set_tracer_provider(provider)
-    _initialized = True
-    return trace.get_tracer(__name__)
+        try:
+            trace.set_tracer_provider(provider)
+        except Exception:
+            pass
+        _initialized = True
+        return get_active_tracer(__name__)

@@ -132,6 +132,14 @@ own localhost calls. Calls to a genuinely remote Phoenix keep normal
 proxy behaviour. For other tooling on such machines, setting
 `NO_PROXY=localhost,127.0.0.1` remains a useful general workaround.
 
+`vibe-debug down` verifies that the recorded PID is still the Phoenix
+process Vibe-Debug started before signalling it. On platforms where
+identity cannot be verified (including old plain-integer PID files
+from previous versions), `stop_server` will refuse and keep the PID
+file. Users there must remove the stale Phoenix process manually.
+That is the correct safe default — silently killing an unverified PID
+is precisely the bug this behaviour removes.
+
 ---
 
 ## IDE MCP Integration
