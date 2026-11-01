@@ -111,10 +111,15 @@ class UniversalRuntimeTracer:
         project_root: str,
         project_name: str = "vibe-debug",
         min_duration_ms: float = 0.0,
+        config=None,
     ):
         self.project_root = os.path.abspath(project_root)
         self.project_name = project_name
         self.min_duration_ms = min_duration_ms
+        # Preview redaction honours VibeConfig when supplied (via start());
+        # defaults match VibeConfig defaults (1024 / no extra keys).
+        self._redact_keys = list(getattr(config, "redact_keys", ()) or ())
+        self._max_attr_length = getattr(config, "max_attr_length", 1024)
         self.filter = RelevanceFilter(project_root)
         self._tracer = trace.get_tracer("vibe_debug.runtime.sys_tracer")
         self._active = False
@@ -187,7 +192,11 @@ class UniversalRuntimeTracer:
                 for k, v in list(frame.f_locals.items())[:3]
                 if not k.startswith("_")
             }
-            input_preview = redact_value(locals_preview, max_length=200)
+            input_preview = redact_value(
+                locals_preview,
+                extra_keys=self._redact_keys,
+                max_length=self._max_attr_length,
+            )
         except Exception:
             input_preview = ""
 
@@ -224,7 +233,12 @@ class UniversalRuntimeTracer:
 
             span.set_attribute("execution_time_ms", duration_ms)
             span.set_attribute(
-                "vibe.output_preview", redact_value(return_value, max_length=200)
+                "vibe.output_preview",
+                redact_value(
+                    return_value,
+                    extra_keys=self._redact_keys,
+                    max_length=self._max_attr_length,
+                ),
             )
 
             if return_value is None or return_value == [] \

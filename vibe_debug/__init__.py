@@ -70,6 +70,7 @@ def start(
         runtime_tracer = UniversalRuntimeTracer(
             project_root=root,
             project_name=config.project_name,
+            config=config,
         )
         runtime_tracer.start()
         print("[vibe-debug] Universal runtime tracing enabled")

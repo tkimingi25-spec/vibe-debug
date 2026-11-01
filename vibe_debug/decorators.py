@@ -51,8 +51,12 @@ def vibetrace(component_type: str, config=None, *, redact_keys=(), max_attr_leng
     """Capture inputs, outputs, failures, and timing for a function call.
 
     ``vibe.input``/``vibe.output`` pass through redaction (see
-    ``vibe_debug.redaction``): key-name-based only, no content scanning,
-    so bare positional/free-text secrets are not detected.
+    ``vibe_debug.redaction``): key-name-based only, no content scanning.
+    Positional arguments matched to declared parameter names via
+    ``inspect.signature`` ARE redacted by that parameter name;
+    ``*args`` and unknown-signature positionals are NOT. Secrets
+    embedded in free-text values under non-sensitive keys are NOT
+    detected.
     ``config`` is an optional VibeConfig; its redact_keys extend the
     defaults and its max_attr_length caps attribute length. Explicit
     decorator arguments override the config values.

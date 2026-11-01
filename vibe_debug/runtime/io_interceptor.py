@@ -1,4 +1,5 @@
 import functools
+import json
 import os
 import socket
 import time
@@ -6,6 +7,39 @@ from typing import Optional
 
 from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
+
+from vibe_debug.redaction import redact_url, redact_value
+
+
+def _redact_body(body, max_length=200):
+    """Redact a request body for a span attribute; never raises.
+
+    Dict/list bodies are walked by key name via ``redact_value``.
+    String/bytes bodies that parse as JSON objects/arrays are redacted
+    the same way; other strings use key-name redaction only (no content
+    scanning), consistent with ``vibe_debug.redaction``.
+    Length is capped at 200: ``VibeConfig`` is not passed to this module
+    (its constructor receives only ``project_name`` at every call site),
+    so the existing preview caps are kept and redaction is applied
+    within them.
+    """
+    try:
+        candidate = body
+        if isinstance(candidate, (bytes, bytearray)):
+            try:
+                candidate = bytes(candidate).decode("utf-8", errors="replace")
+            except Exception:
+                candidate = str(body)
+        if isinstance(candidate, str):
+            try:
+                parsed = json.loads(candidate)
+            except Exception:
+                parsed = None
+            if isinstance(parsed, (dict, list)):
+                return redact_value(parsed, max_length=max_length)
+        return redact_value(candidate, max_length=max_length)
+    except Exception:
+        return "<unrepresentable>"
 
 
 class IOInterceptor:
@@ -237,32 +271,45 @@ class IOInterceptor:
         Shared span creation logic for HTTP calls.
         Used by both requests and httpx patches.
         """
-        url_str = str(url)
+        try:
+            url_str = url if isinstance(url, str) else str(url)
+        except Exception:
+            url_str = "<unrepresentable>"
 
         try:
             from urllib.parse import urlparse
             parsed = urlparse(url_str)
             host = parsed.netloc or url_str
             path = parsed.path or "/"
+            # Sanitised host[:port] for span name/attributes: never
+            # includes userinfo credentials from the URL authority.
+            try:
+                _port = parsed.port
+            except ValueError:
+                _port = None
+            hostport = parsed.hostname or host.rsplit("@", 1)[-1]
+            if _port is not None:
+                hostport = f"{hostport}:{_port}"
         except Exception:
             host = url_str
+            hostport = url_str
             path = "/"
 
         if "6006" in host or "4317" in host:
             return original_fn(client_self, method, url, **kwargs)
 
-        span_name = f"http.{method.upper()} {host}{path}"
+        span_name = f"http.{method.upper()} {hostport}{path}"
 
         with self._tracer.start_as_current_span(span_name) as span:
             span.set_attribute("vibe.type", "http_call")
             span.set_attribute("http.method", method.upper())
-            span.set_attribute("http.url", url_str[:500])
-            span.set_attribute("http.host", host)
+            span.set_attribute("http.url", redact_url(url_str, max_length=500))
+            span.set_attribute("http.host", hostport)
 
             body = kwargs.get("json") or kwargs.get("data") or ""
             if body:
                 span.set_attribute(
-                    "http.request_preview", str(body)[:200]
+                    "http.request_preview", _redact_body(body, max_length=200)
                 )
 
             start = time.time()

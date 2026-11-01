@@ -32,6 +32,103 @@ def flatten_attrs(attrs: dict, prefix="") -> dict:
     return flat
 
 
+class _FakeSpan:
+    def __init__(self):
+        self.attributes = {}
+        self.status = None
+
+    def set_attribute(self, key, value):
+        self.attributes[key] = value
+
+    def set_status(self, status):
+        self.status = status
+
+    def record_exception(self, exc):
+        pass
+
+
+class _FakeTracer:
+    def __init__(self, span):
+        self._span = span
+        self.span_name = None
+
+    def start_as_current_span(self, name):
+        import contextlib
+
+        self.span_name = name
+
+        @contextlib.contextmanager
+        def _cm():
+            yield self._span
+
+        return _cm()
+
+
+def _run_traced_http(interceptor, url, **kwargs):
+    span = _FakeSpan()
+    interceptor._tracer = _FakeTracer(span)
+
+    def fake_original(client_self, method, url_arg, **kw):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(status_code=200)
+
+    result = interceptor._traced_http_call(
+        fake_original, object(), "POST", url, **kwargs
+    )
+    assert result.status_code == 200
+    return span, interceptor._tracer.span_name
+
+
+def test_traced_http_call_redacts_url_and_body():
+    interceptor = IOInterceptor(project_name="test")
+    secret = "xyz" + "-secret"
+    url_secret = "p4ss" + "w0rd"
+    frag_secret = "frag" + "-secret"
+    span, span_name = _run_traced_http(
+        interceptor,
+        f"https://user:{url_secret}@example.com/p?api_key={secret}&q=ok"
+        f"#access_token={frag_secret}&x=1",
+        json={"api_key": secret, "note": "keep-me"},
+    )
+    blob = " | ".join(str(v) for v in span.attributes.values()) + span_name
+    assert secret not in blob
+    assert url_secret not in blob
+    assert frag_secret not in blob
+    assert "api_key=***" in span.attributes["http.url"]
+    assert "q=ok" in span.attributes["http.url"]
+    assert "user:***@example.com" in span.attributes["http.url"]
+    assert "access_token=***" in span.attributes["http.url"]
+    assert "keep-me" in span.attributes["http.request_preview"]
+    assert "***" in span.attributes["http.request_preview"]
+    assert len(span.attributes["http.url"]) <= 500
+    assert len(span.attributes["http.request_preview"]) <= 200
+
+
+def test_traced_http_call_redacts_json_string_body():
+    interceptor = IOInterceptor(project_name="test")
+    secret = "xyz" + "-secret"
+    span, _ = _run_traced_http(
+        interceptor,
+        "https://example.com/p?q=ok",
+        data='{"api_key": "' + secret + '", "note": "keep-me"}',
+    )
+    assert secret not in span.attributes["http.request_preview"]
+    assert "keep-me" in span.attributes["http.request_preview"]
+    assert "***" in span.attributes["http.request_preview"]
+
+
+def test_redact_url_direct():
+    from vibe_debug.redaction import redact_url
+
+    secret = "xyz" + "-secret"
+    out = redact_url(f"https://h/p?api_key={secret}&q=ok&token_count=5")
+    assert secret not in out
+    assert "api_key=***" in out
+    assert "q=ok" in out
+    assert "token_count=5" in out
+
+
 def test_interceptor_patches_available_libraries():
     """
     IOInterceptor.start() must successfully patch

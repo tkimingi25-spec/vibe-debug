@@ -1,10 +1,13 @@
 """Redact and truncate values before they become span attributes.
 
-Key-name-based redaction only: no content scanning. Secrets passed as
-bare positional strings, or embedded inside free-text values under
-non-sensitive keys (e.g. "use key sk-..." inside a ``query`` string),
-are not detected. ``prompt`` and similar payload fields are not
-redacted by default; add them via ``redact_keys`` / ``VibeConfig``.
+Key-name-based redaction only: no content scanning. Positional
+arguments matched to declared parameter names via ``inspect.signature``
+ARE redacted by that parameter name; ``*args`` and
+unknown-signature positionals are NOT. Secrets embedded inside
+free-text values under non-sensitive keys (e.g. "use key sk-..."
+inside a ``query`` string) are not detected. ``prompt`` and similar
+payload fields are not redacted by default; add them via
+``redact_keys`` / ``VibeConfig``.
 
 Fail-closed for privacy, fail-safe for execution: this module never
 raises, never invokes user ``__eq__``, and on any stringification
@@ -12,9 +15,10 @@ failure returns a safe placeholder instead of the raw value.
 """
 
 import re
+from urllib.parse import unquote_plus, urlparse, urlunparse
 
 MAX_DEPTH = 10
-TRUNCATION_MARKER = "[truncated]"
+TRUNCATION_MARKER = "…[truncated]"
 REDACTED = "***"
 
 # Compact forms (lowercase, non-alphanumerics removed) matched whole-key
@@ -144,6 +148,58 @@ def _truncate(text, max_length):
     if limit <= len(TRUNCATION_MARKER):
         return TRUNCATION_MARKER[:limit]
     return text[: limit - len(TRUNCATION_MARKER)] + TRUNCATION_MARKER
+
+
+def _redact_query_like(text, extra_keys=()):
+    """Redact sensitive values in a ``k=v&k2=v2`` string, preserving the rest."""
+    if not text:
+        return text
+    parts = []
+    for pair in text.split("&"):
+        if "=" in pair:
+            raw_key, raw_value = pair.split("=", 1)
+            if _is_sensitive_key(unquote_plus(raw_key), extra_keys):
+                parts.append(f"{raw_key}={REDACTED}")
+            else:
+                parts.append(pair)
+        else:
+            parts.append(pair)
+    return "&".join(parts)
+
+
+def redact_url(url, *, extra_keys=(), max_length=500):
+    """Return a redacted, truncated URL string; never raises, never leaks.
+
+    Query-string values whose parameter name is sensitive (per the same
+    key logic as :func:`redact_value`) are replaced with ``***``;
+    non-sensitive parameters are preserved verbatim. A password in the
+    URL authority (``https://user:pass@host/``) is replaced with ``***``.
+    The fragment is treated as a query-like ``k=v`` string and redacted
+    the same way, because fragments can carry tokens (e.g. OAuth
+    implicit flow); bare non-``k=v`` fragment text is left as-is.
+    """
+    try:
+        try:
+            text = url if isinstance(url, str) else str(url)
+        except Exception:
+            return _truncate("<unrepresentable>", max_length)
+        parsed = urlparse(text)
+        netloc = parsed.netloc
+        if "@" in netloc:
+            userinfo, hostport = netloc.rsplit("@", 1)
+            if ":" in userinfo:
+                username = userinfo.split(":", 1)[0]
+                netloc = f"{username}:{REDACTED}@{hostport}"
+        rebuilt = urlunparse(
+            parsed._replace(
+                netloc=netloc,
+                query=_redact_query_like(parsed.query, extra_keys),
+                fragment=_redact_query_like(parsed.fragment, extra_keys),
+            )
+        )
+        return _truncate(rebuilt, max_length)
+    except Exception:
+        return _truncate("<unrepresentable>", max_length)
 
 
 def redact_value(value, key=None, *, extra_keys=(), max_length=1024):

@@ -65,7 +65,7 @@ def auto_instrument_module(module_name: str, config: VibeConfig):
             if getattr(func_obj, "_vibe_debug_instrumented", False):
                 continue
 
-            traced = vibetrace(component_type=component_type)(func_obj)
+            traced = vibetrace(component_type=component_type, config=config)(func_obj)
             wrapped = wrapt.FunctionWrapper(
                 func_obj,
                 lambda wrapped, instance, args, kwargs, traced=traced: traced(*args, **kwargs),
