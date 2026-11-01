@@ -7,6 +7,8 @@ from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
+from vibe_debug.config.config import DEFAULT_OTLP_ENDPOINT
+
 load_dotenv()
 
 _initialized = False
@@ -32,9 +34,7 @@ def init_vibedebug(project_name="vibe-debug"):
     if _initialized:
         return trace.get_tracer(__name__)
 
-    otlp_endpoint = os.getenv(
-        "OTLP_ENDPOINT", "http://localhost:6006/v1/traces"
-    )
+    otlp_endpoint = os.getenv("OTLP_ENDPOINT", DEFAULT_OTLP_ENDPOINT)
 
     print(f"[vibe-debug] Initializing tracer -> {otlp_endpoint}")
 

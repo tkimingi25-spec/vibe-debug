@@ -116,6 +116,22 @@ The `vibe-debug` CLI provides single-command management for services, diagnostic
 
 *(Add `--project-root <path>` to any command to target a specific project folder).*
 
+### Phoenix endpoint and proxies
+
+All Vibe-Debug components (CLI, MCP bridge, server manager) resolve the
+Phoenix endpoint the same way: an explicit setting wins, then
+`PHOENIX_HOST` / `PHOENIX_PORT`, then the `otlp_endpoint` in
+`vibedebug.toml` (its path is stripped), then the default
+`http://localhost:6006`. A custom Phoenix port therefore works for
+`failures`, `explain`, and the MCP tools too.
+
+If your machine routes traffic through a proxy (`HTTP_PROXY` /
+`HTTPS_PROXY`), calls to a loopback Phoenix skip the proxy
+automatically — Vibe-Debug no longer requires any workaround for its
+own localhost calls. Calls to a genuinely remote Phoenix keep normal
+proxy behaviour. For other tooling on such machines, setting
+`NO_PROXY=localhost,127.0.0.1` remains a useful general workaround.
+
 ---
 
 ## IDE MCP Integration

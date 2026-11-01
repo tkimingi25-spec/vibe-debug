@@ -3,11 +3,15 @@ import tomllib
 from dataclasses import dataclass, field
 from typing import List
 
+from vibe_debug.phoenix_endpoint import DEFAULT_PHOENIX_BASE_URL
+
+DEFAULT_OTLP_ENDPOINT = f"{DEFAULT_PHOENIX_BASE_URL}/v1/traces"
+
 
 @dataclass
 class VibeConfig:
     project_name: str = "vibe-debug"
-    otlp_endpoint: str = "http://localhost:6006/v1/traces"
+    otlp_endpoint: str = DEFAULT_OTLP_ENDPOINT
     watch_modules: List[str] = field(default_factory=list)
     ignore_functions: List[str] = field(
         default_factory=lambda: ["__init__", "__repr__", "__str__"]
@@ -30,7 +34,7 @@ def load_config(config_path: str = "vibedebug.toml") -> VibeConfig:
     return VibeConfig(
         project_name=data.get("project", {}).get("name", "vibe-debug"),
         otlp_endpoint=data.get("tracer", {}).get(
-            "otlp_endpoint", "http://localhost:6006/v1/traces"
+            "otlp_endpoint", DEFAULT_OTLP_ENDPOINT
         ),
         watch_modules=data.get("watch", {}).get("modules", []),
         ignore_functions=data.get("watch", {}).get(

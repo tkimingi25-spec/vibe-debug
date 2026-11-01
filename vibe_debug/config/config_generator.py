@@ -1,6 +1,7 @@
 import json
 import os
 
+from vibe_debug.config.config import DEFAULT_OTLP_ENDPOINT
 from vibe_debug.runtime.static_analyzer import StaticPipelineMap
 
 
@@ -44,7 +45,7 @@ def generate_config(
 name = "{project_name}"
 
 [tracer]
-otlp_endpoint = "http://localhost:6006/v1/traces"
+otlp_endpoint = "{DEFAULT_OTLP_ENDPOINT}"
 
 [discovered_components]
 # vibe-debug found these by reading your source files

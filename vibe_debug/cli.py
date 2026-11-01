@@ -11,6 +11,7 @@ import httpx
 
 from server import manager
 from vibe_debug.config import generate_config, load_config
+from vibe_debug.phoenix_endpoint import make_client, resolve_base_url
 from vibe_debug.runtime.static_analyzer import ProjectStaticAnalyzer
 
 CACHE_FILENAME = ".vibe_pipeline_cache.json"
@@ -31,7 +32,18 @@ def _load_cache(project_root: Path) -> dict:
         return {}
 
 
-def _fetch_spans(limit=10) -> list:
+def _local_config():
+    """Load vibedebug.toml from the cwd if present (no output otherwise)."""
+    try:
+        candidate = Path.cwd() / "vibedebug.toml"
+        if candidate.exists():
+            return load_config(str(candidate))
+    except Exception:
+        pass
+    return None
+
+
+def _fetch_spans(limit=10, *, base_url=None, config=None) -> list:
     query = f"""
     {{ projects {{ edges {{ node {{
         spans(first: {limit}, sort: {{col: startTime, dir: desc}}) {{
@@ -39,10 +51,12 @@ def _fetch_spans(limit=10) -> list:
         }}
     }} }} }} }}
     """
+    resolved = resolve_base_url(
+        base_url, config=config if config is not None else _local_config()
+    )
     try:
-        response = httpx.post(
-            "http://localhost:6006/graphql", json={"query": query}, timeout=5.0
-        )
+        with make_client(resolved, timeout=5.0) as client:
+            response = client.post("/graphql", json={"query": query})
         response.raise_for_status()
         projects = response.json()["data"]["projects"]["edges"]
         spans = []

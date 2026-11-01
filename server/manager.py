@@ -10,22 +10,39 @@ from pathlib import Path
 import httpx
 from dotenv import load_dotenv
 
+from vibe_debug.phoenix_endpoint import resolve_base_url, trust_env_for
+
 load_dotenv()
 
 PID_FILENAME = ".vibe_phoenix.pid"
 
 
-def health_url(host="127.0.0.1", port=6006):
-    return f"http://{host}:{port}/healthz"
+def _manager_base_url(host=None, port=None) -> str:
+    """Resolve the managed Phoenix base URL via the single resolver.
+
+    Explicit host/port arguments (the historical manager API) are
+    combined into an explicit candidate; otherwise resolution falls
+    through env > config > default in ``resolve_base_url``.
+    """
+    if host is not None or port is not None:
+        explicit = f"http://{host or '127.0.0.1'}:{port or 6006}"
+        return resolve_base_url(explicit)
+    return resolve_base_url()
 
 
-def wait_for_phoenix(host="127.0.0.1", port=6006, timeout=30) -> bool:
+def health_url(host=None, port=None):
+    return f"{_manager_base_url(host, port)}/healthz"
+
+
+def wait_for_phoenix(host=None, port=None, timeout=30) -> bool:
     """Poll Phoenix's health endpoint until it is ready or times out."""
     url = health_url(host, port)
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
-            response = httpx.get(url, timeout=2.0)
+            response = httpx.get(
+                url, timeout=2.0, trust_env=trust_env_for(url)
+            )
             if response.status_code == 200:
                 print(f"[vibe-debug] Phoenix ready at {url.removesuffix('/healthz')}")
                 return True
@@ -36,10 +53,14 @@ def wait_for_phoenix(host="127.0.0.1", port=6006, timeout=30) -> bool:
     return False
 
 
-def is_phoenix_healthy(host="127.0.0.1", port=6006) -> bool:
+def is_phoenix_healthy(host=None, port=None) -> bool:
     """Return whether a Phoenix server responds to its health endpoint."""
+    url = health_url(host, port)
     try:
-        return httpx.get(health_url(host, port), timeout=2.0).status_code == 200
+        return (
+            httpx.get(url, timeout=2.0, trust_env=trust_env_for(url)).status_code
+            == 200
+        )
     except httpx.HTTPError:
         return False
 
@@ -50,8 +71,11 @@ def _pid_path(project_root=".") -> Path:
 
 def launch_server(host=None, port=None, timeout=30, project_root=".") -> bool:
     """Start Phoenix in a managed child process and wait for readiness."""
-    host = host or os.getenv("PHOENIX_HOST", "127.0.0.1")
-    port = int(port or os.getenv("PHOENIX_PORT", "6006"))
+    from urllib.parse import urlparse
+
+    parsed = urlparse(_manager_base_url(host, port))
+    host = parsed.hostname or "127.0.0.1"
+    port = parsed.port or 6006
     if is_phoenix_healthy(host, port):
         print(f"[vibe-debug] Phoenix is already running at {host}:{port}")
         return True

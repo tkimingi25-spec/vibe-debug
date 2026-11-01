@@ -1,8 +1,9 @@
 import json
 import os
 
-import httpx
 from mcp.server.fastmcp import FastMCP
+
+from vibe_debug.phoenix_endpoint import make_client, resolve_base_url
 
 PROJECT_ROOT = os.getenv(
     "VIBE_PROJECT_ROOT",
@@ -16,8 +17,26 @@ PIPELINE_CACHE = os.path.join(
 # 1. Initialize FastMCP
 mcp = FastMCP("vibe-debug")
 
-PHOENIX_BASE_URL = "http://localhost:6006"
-PHOENIX_GRAPHQL_URL = "http://localhost:6006/graphql"
+def _bridge_config():
+    """Load vibedebug.toml from the project root if present."""
+    try:
+        candidate = os.path.join(PROJECT_ROOT, "vibedebug.toml")
+        if os.path.exists(candidate):
+            from vibe_debug.config import load_config
+
+            return load_config(candidate)
+    except Exception:
+        pass
+    return None
+
+
+def phoenix_base_url() -> str:
+    """Resolve the Phoenix base URL (explicit > env > config > default)."""
+    return resolve_base_url(config=_bridge_config())
+
+
+def phoenix_graphql_url() -> str:
+    return f"{phoenix_base_url()}/graphql"
 
 
 def _normalize_attributes(attributes):
@@ -42,12 +61,13 @@ def flatten_attrs(attrs: dict, prefix="") -> dict:
     return flat
 
 
-def query_phoenix(query: str):
+def query_phoenix(query: str, *, base_url: str | None = None):
     """Query Phoenix GraphQL and return the raw JSON payload."""
+    resolved = resolve_base_url(base_url, config=_bridge_config())
     try:
-        with httpx.Client(timeout=10.0) as client:
+        with make_client(resolved, timeout=10.0) as client:
             response = client.post(
-                PHOENIX_GRAPHQL_URL,
+                "/graphql",
                 json={"query": query},
             )
             response.raise_for_status()
