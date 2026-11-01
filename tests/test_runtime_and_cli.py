@@ -59,19 +59,23 @@ def test_tracer_uses_bounded_batch_exporting(monkeypatch):
     exporter = MagicMock()
     processor = MagicMock()
     monkeypatch.setattr(tracer_module, "_initialized", False)
+    monkeypatch.setattr(tracer_module, "_health_exporter", None)
     with (
         patch.object(tracer_module, "OTLPSpanExporter", return_value=exporter),
-        patch.object(tracer_module, "LoggingBatchSpanProcessor", return_value=processor) as factory,
+        patch.object(tracer_module, "BatchSpanProcessor", return_value=processor) as factory,
         patch.object(tracer_module.trace, "set_tracer_provider"),
     ):
         tracer_module.init_vibedebug("batch-test")
 
-    factory.assert_called_once_with(
-        exporter,
-        export_timeout_millis=5000,
-        schedule_delay_millis=500,
-        max_export_batch_size=32,
-    )
+    factory.assert_called_once()
+    args, kwargs = factory.call_args
+    assert isinstance(args[0], tracer_module.HealthRecordingExporter)
+    assert args[0].delegate is exporter
+    assert kwargs == {
+        "export_timeout_millis": 5000,
+        "schedule_delay_millis": 500,
+        "max_export_batch_size": 32,
+    }
 
 
 def test_cli_exposes_all_planned_commands():

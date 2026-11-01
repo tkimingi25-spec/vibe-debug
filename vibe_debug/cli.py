@@ -5,12 +5,14 @@ import importlib.util
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 from server import manager
 from vibe_debug import phoenix_client
 from vibe_debug.config import generate_config, load_config
 from vibe_debug.phoenix_endpoint import make_client
+from vibe_debug.tracer import get_export_health
 from vibe_debug.runtime.static_analyzer import ProjectStaticAnalyzer
 
 CACHE_FILENAME = ".vibe_pipeline_cache.json"
@@ -135,6 +137,35 @@ def command_explain(args) -> int:
     return 0
 
 
+def _format_export_health(snapshot, now=None) -> str:
+    """One diagnostics line from an export-health snapshot."""
+    try:
+        status = snapshot.get("status", "no_export_yet")
+        successes = snapshot.get("successes", 0)
+        failures = snapshot.get("failures", 0)
+        if status == "ok":
+            ts = snapshot.get("last_success_at")
+            if ts is not None:
+                ago = max(0, int((now if now is not None else time.time()) - ts))
+                return (
+                    f"Telemetry export: OK (last success {ago}s ago; "
+                    f"successes={successes}, failures={failures})"
+                )
+            return (
+                f"Telemetry export: OK (successes={successes}, "
+                f"failures={failures})"
+            )
+        if status == "failed":
+            error = snapshot.get("last_error") or "unknown error"
+            return (
+                f"Telemetry export: FAILED (last error: {error}; "
+                f"successes={successes}, failures={failures})"
+            )
+        return "Telemetry export: no export attempted yet"
+    except Exception:
+        return "Telemetry export: no export attempted yet"
+
+
 def command_doctor(args) -> int:
     checks = {
         "Python >= 3.11": sys.version_info >= (3, 11),
@@ -144,6 +175,10 @@ def command_doctor(args) -> int:
     }
     for name, passed in checks.items():
         print(f"{'OK' if passed else 'WARN'}  {name}")
+    try:
+        print(_format_export_health(get_export_health()))
+    except Exception:
+        print("Telemetry export: no export attempted yet")
     return 0
 
 
