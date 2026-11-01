@@ -7,11 +7,10 @@ import os
 import sys
 from pathlib import Path
 
-import httpx
-
 from server import manager
+from vibe_debug import phoenix_client
 from vibe_debug.config import generate_config, load_config
-from vibe_debug.phoenix_endpoint import make_client, resolve_base_url
+from vibe_debug.phoenix_endpoint import make_client
 from vibe_debug.runtime.static_analyzer import ProjectStaticAnalyzer
 
 CACHE_FILENAME = ".vibe_pipeline_cache.json"
@@ -44,31 +43,16 @@ def _local_config():
 
 
 def _fetch_spans(limit=10, *, base_url=None, config=None) -> list:
-    query = f"""
-    {{ projects {{ edges {{ node {{
-        spans(first: {limit}, sort: {{col: startTime, dir: desc}}) {{
-            edges {{ node {{ name statusCode latencyMs startTime attributes }} }}
-        }}
-    }} }} }} }}
-    """
-    resolved = resolve_base_url(
-        base_url, config=config if config is not None else _local_config()
+    """CLI span fetch: shared fetch, nodes re-wrapped as GraphQL edges."""
+    nodes = phoenix_client.fetch_spans(
+        limit,
+        base_url=base_url,
+        config=config if config is not None else _local_config(),
+        timeout=5.0,
+        include_context=False,
+        client_factory=make_client,
     )
-    try:
-        with make_client(resolved, timeout=5.0) as client:
-            response = client.post("/graphql", json={"query": query})
-        response.raise_for_status()
-        projects = response.json()["data"]["projects"]["edges"]
-        spans = []
-        for project in projects:
-            spans.extend(project["node"]["spans"]["edges"])
-        return sorted(
-            spans,
-            key=lambda edge: edge["node"].get("startTime", ""),
-            reverse=True,
-        )[:limit]
-    except (httpx.HTTPError, KeyError, TypeError, ValueError):
-        return []
+    return [{"node": node} for node in nodes]
 
 
 def _format_map(cache: dict) -> str:

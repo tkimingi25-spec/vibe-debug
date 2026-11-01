@@ -3,6 +3,7 @@ import os
 
 from mcp.server.fastmcp import FastMCP
 
+from vibe_debug import phoenix_client
 from vibe_debug.phoenix_endpoint import make_client, resolve_base_url
 
 PROJECT_ROOT = os.getenv(
@@ -63,48 +64,25 @@ def flatten_attrs(attrs: dict, prefix="") -> dict:
 
 def query_phoenix(query: str, *, base_url: str | None = None):
     """Query Phoenix GraphQL and return the raw JSON payload."""
-    resolved = resolve_base_url(base_url, config=_bridge_config())
-    try:
-        with make_client(resolved, timeout=10.0) as client:
-            response = client.post(
-                "/graphql",
-                json={"query": query},
-            )
-            response.raise_for_status()
-            return response.json()
-    except Exception as e:
-        return {"error": f"Could not connect to Phoenix GraphQL: {str(e)}"}
+    return phoenix_client.query_graphql(
+        query,
+        base_url=base_url,
+        config=_bridge_config(),
+        timeout=10.0,
+        client_factory=make_client,
+    )
 
 
 def _fetch_spans(limit: int = 20) -> list:
-    """Fetch recent spans from Phoenix via GraphQL."""
-    gql = f"""
-    {{
-      projects {{
-        edges {{
-          node {{
-            spans(first: {limit}, sort: {{col: startTime, dir: desc}}) {{
-              edges {{
-                node {{
-                  name statusCode latencyMs
-                  startTime attributes
-                  context {{ spanId traceId }}
-                }}
-              }}
-            }}
-          }}
-        }}
-      }}
-    }}
-    """
-    data = query_phoenix(gql)
-    if "error" in data:
-        return []
+    """Fetch recent spans from Phoenix via GraphQL (shared implementation)."""
     try:
-        spans = []
-        for project in data["data"]["projects"]["edges"]:
-            spans.extend(edge["node"] for edge in project["node"]["spans"]["edges"])
-        return sorted(spans, key=lambda span: span.get("startTime", ""), reverse=True)[:limit]
+        return phoenix_client.fetch_spans(
+            limit,
+            config=_bridge_config(),
+            timeout=10.0,
+            include_context=True,
+            client_factory=make_client,
+        )
     except Exception:
         return []
 
