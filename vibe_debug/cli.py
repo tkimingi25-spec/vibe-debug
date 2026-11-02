@@ -11,6 +11,7 @@ from pathlib import Path
 from server import manager
 from vibe_debug import phoenix_client
 from vibe_debug.config import generate_config, load_config
+from vibe_debug.explainer import build_evidence_package, explain_failure
 from vibe_debug.phoenix_endpoint import make_client
 from vibe_debug.tracer import get_export_health
 from vibe_debug.runtime.static_analyzer import ProjectStaticAnalyzer
@@ -129,11 +130,38 @@ def command_explain(args) -> int:
     if not error:
         print("No failures in recent traces. All spans completed OK or Phoenix is empty.")
         return 0
-    print("=== FAILURE EXPLANATION ===")
-    print(f"Component: {error.get('name', 'unknown')}")
-    print(f"Status: {error.get('statusCode', 'unknown')}")
-    print(f"Latency: {error.get('latencyMs', 0)}ms")
-    print("Use vibe-debug failures for a concise list of recent errors.")
+    deterministic = [
+        "=== FAILURE EXPLANATION ===",
+        f"Component: {error.get('name', 'unknown')}",
+        f"Status: {error.get('statusCode', 'unknown')}",
+        f"Latency: {error.get('latencyMs', 0)}ms",
+        "Use vibe-debug failures for a concise list of recent errors.",
+    ]
+    for line in deterministic:
+        print(line)
+
+    language = getattr(args, "language", None)
+    config = _local_config()
+    enabled = bool(getattr(config, "explainer_enabled", False)) if config else False
+    if enabled or language is not None:
+        evidence = build_evidence_package(
+            error,
+            spans,
+            max_evidence_size=getattr(config, "explainer_max_evidence_size", 8000),
+        )
+        result = explain_failure(
+            evidence,
+            language=language,
+            config=config,
+            fallback_text="\n".join(deterministic),
+        )
+        if result.get("error"):
+            print(result["error"] + "; showing deterministic explanation.")
+        elif result.get("source") == "llm":
+            print(
+                f"--- AI explanation (Muse Spark; language={result.get('language')}) ---"
+            )
+            print(result.get("text", ""))
     return 0
 
 
@@ -213,6 +241,11 @@ def build_parser() -> argparse.ArgumentParser:
     for name, handler in handlers.items():
         command = subparsers.add_parser(name)
         command.set_defaults(handler=handler)
+        if name == "explain":
+            command.add_argument(
+                "--language", default=None,
+                help="AI explanation language: en or sw (default: config or en)",
+            )
     return parser
 
 

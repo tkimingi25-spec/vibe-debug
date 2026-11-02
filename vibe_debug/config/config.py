@@ -20,6 +20,15 @@ class VibeConfig:
     # in vibe_debug.redaction; max_attr_length truncates span attributes.
     max_attr_length: int = 1024
     redact_keys: List[str] = field(default_factory=list)
+    # Optional Muse Spark explainer (Stage 2). Credentials are never
+    # stored here; they come only from the MUSE_SPARK_API_KEY env var.
+    explainer_enabled: bool = False
+    # Verified flagship defaults (Meta docs, dev.meta.ai); not secrets.
+    explainer_model: str = "muse-spark-1.3"
+    explainer_endpoint: str = "https://api.meta.ai/v1/chat/completions"
+    explainer_timeout_seconds: float = 10.0
+    explainer_max_evidence_size: int = 8000
+    explainer_language: str = "en"
 
 
 def load_config(config_path: str = "vibedebug.toml") -> VibeConfig:
@@ -44,4 +53,16 @@ def load_config(config_path: str = "vibedebug.toml") -> VibeConfig:
             "max_attr_length", 1024
         ),
         redact_keys=data.get("redaction", {}).get("redact_keys", []),
+        explainer_enabled=bool(data.get("explainer", {}).get("enabled", False)),
+        explainer_model=data.get("explainer", {}).get("model", "muse-spark-1.3"),
+        explainer_endpoint=data.get("explainer", {}).get(
+            "endpoint", "https://api.meta.ai/v1/chat/completions"
+        ),
+        explainer_timeout_seconds=data.get("explainer", {}).get(
+            "timeout_seconds", 10.0
+        ),
+        explainer_max_evidence_size=data.get("explainer", {}).get(
+            "max_evidence_size", 8000
+        ),
+        explainer_language=data.get("explainer", {}).get("language", "en"),
     )

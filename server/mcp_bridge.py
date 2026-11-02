@@ -4,6 +4,8 @@ import os
 from mcp.server.fastmcp import FastMCP
 
 from vibe_debug import phoenix_client
+from vibe_debug.explainer import build_evidence_package, explain_failure
+from vibe_debug.redaction import redact_value
 from vibe_debug.phoenix_endpoint import make_client, resolve_base_url
 
 PROJECT_ROOT = os.getenv(
@@ -99,6 +101,21 @@ def _parse_attrs(span: dict) -> dict:
         return flatten_attrs(attrs_parsed)
     except Exception:
         return {}
+
+
+def _redact_display(value) -> str:
+    """Redact a value for display; JSON strings are redacted by nested key."""
+    try:
+        if isinstance(value, str):
+            try:
+                parsed = json.loads(value)
+            except Exception:
+                parsed = None
+            if isinstance(parsed, (dict, list)):
+                return json.dumps(redact_value(parsed), default=str)
+        return redact_value(value)
+    except Exception:
+        return "<unrepresentable>"
 
 
 def _detect_failure_pattern(span: dict, attrs: dict) -> str:
@@ -321,7 +338,7 @@ async def get_pipeline_map():
 
 
 @mcp.tool()
-async def why_did_this_fail():
+async def why_did_this_fail(language: str | None = None):
     """
     Returns a fully structured failure analysis built from
     trace data. Includes: crash point, failure pattern type,
@@ -330,6 +347,10 @@ async def why_did_this_fail():
     count for this component, and timing anomalies.
     The IDE assistant uses this to explain failures without
     reading any source files.
+
+    Optional ``language`` ("en"/"sw") requests an additional
+    Muse Spark AI explanation when the explainer is configured;
+    without it, behaviour is unchanged and deterministic.
     """
     spans = _fetch_spans(limit=30)
     if not spans:
@@ -386,10 +407,10 @@ async def why_did_this_fail():
     lines.extend([
         "",
         "INPUTS AT FAILURE:",
-        f"  {attrs.get('vibe.input', attrs.get('vibe.input_preview', 'not captured'))}",
+        f"  {_redact_display(attrs.get('vibe.input', attrs.get('vibe.input_preview', 'not captured')))}",
         "",
         "OUTPUT AT FAILURE:",
-        f"  {attrs.get('vibe.output', attrs.get('vibe.output_preview', 'not captured'))}",
+        f"  {_redact_display(attrs.get('vibe.output', attrs.get('vibe.output_preview', 'not captured')))}",
         "",
         "ERROR DETAIL:",
         f"  type:    {attrs.get('error.type', 'not captured')}",
@@ -435,7 +456,28 @@ async def why_did_this_fail():
                 f"{ok_attrs.get('vibe.line', '')}"
             )
 
-    return "\n".join(lines)
+    deterministic_text = "\n".join(lines)
+    config = _bridge_config()
+    enabled = bool(getattr(config, "explainer_enabled", False)) if config else False
+    if enabled or language is not None:
+        evidence = build_evidence_package(
+            error_span,
+            spans,
+            max_evidence_size=getattr(config, "explainer_max_evidence_size", 8000),
+        )
+        result = explain_failure(
+            evidence,
+            language=language,
+            config=config,
+            fallback_text=deterministic_text,
+        )
+        if result.get("source") == "llm":
+            return (
+                deterministic_text
+                + f"\n\n--- AI explanation (Muse Spark; language={result.get('language')}) ---\n"
+                + result.get("text", "")
+            )
+    return deterministic_text
 
 
 @mcp.tool()
