@@ -201,7 +201,7 @@ Deliberately not detected by default: secrets inside free-text values, and failu
 
 ## CLI guide
 
-Global option: `--project-root <path>` (default: current directory) targets a specific project folder.
+Global option: `--project-root <path>` (default: current directory) targets a specific project folder. CLI configuration is loaded from `<project-root>/vibedebug.toml` when `--project-root` is given, falling back to the `vibedebug.toml` in the current directory when no project root is given or no config exists there.
 
 | Command | Purpose | Example output |
 |---|---|---|
@@ -250,7 +250,7 @@ MCP tools read spans from the same resolved Phoenix endpoint as the CLI, so a cu
 
 ## Configuration reference
 
-Configuration lives in `vibedebug.toml` in the project root (created by `vibe-debug init` or automatically by `vibe_debug.start()` when missing). Minimal valid example:
+Configuration lives in `vibedebug.toml` in the project root (created by `vibe-debug init` or automatically by `vibe_debug.start()` when missing). The CLI loads `<project-root>/vibedebug.toml` when `--project-root` is given (for example `vibe-debug --project-root sample_app explain` run from the repository root loads `sample_app/vibedebug.toml`); without `--project-root` it loads the `vibedebug.toml` in the current directory. Minimal valid example:
 
 ```toml
 [project]
@@ -355,7 +355,7 @@ To enable Muse Spark explanations:
    $env:MUSE_SPARK_API_KEY = "<your key>"
    ```
 
-2. Either enable it in configuration (`[explainer] enabled = true`), or explicitly request a language at call time.
+2. Either enable it in configuration (`[explainer] enabled = true`), or explicitly request a language at call time. The explainer is disabled by default (`enabled = false`): normal `explain` makes no paid external calls. An explicit `--language en|sw` request is the opt-in and attempts one live call (credential permitting) even while `enabled = false`. The bundled sample ships a documented `[explainer]` section in `sample_app/vibedebug.toml` with `enabled = false` plus the flagship model/endpoint and `timeout_seconds = 60`, ready to enable.
 
 Usage:
 

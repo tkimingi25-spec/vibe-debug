@@ -38,29 +38,59 @@ def _load_cache(project_root: Path) -> dict:
         return {}
 
 
-def _local_config():
-    """Load vibedebug.toml from the cwd if present (no output otherwise)."""
-    try:
-        candidate = Path.cwd() / "vibedebug.toml"
-        if candidate.exists():
-            return load_config(str(candidate))
-    except Exception:
-        pass
+def _local_config(project_root=None):
+    """Load vibedebug.toml for a CLI invocation (no output otherwise).
+
+    With ``project_root`` (the ``--project-root`` option), load
+    ``<project_root>/vibedebug.toml`` first; fall back to the cwd
+    config when no project root is given or no config exists there.
+    """
+    candidates = []
+    if project_root is not None:
+        candidates.append(Path(project_root) / "vibedebug.toml")
+    candidates.append(Path.cwd() / "vibedebug.toml")
+    for candidate in candidates:
+        try:
+            if candidate.exists():
+                return load_config(str(candidate))
+        except Exception:
+            continue
     return None
 
 
-def _fetch_spans(limit=10, *, base_url=None, config=None, wait_seconds=0) -> list:
+def _cli_config(project_root=None):
+    """Config for a command invocation; tolerates zero-arg test doubles."""
+    try:
+        return _local_config(project_root)
+    except TypeError:
+        return _local_config()
+
+
+def _fetch_spans(limit=10, *, base_url=None, config=None, wait_seconds=0, project_root=None) -> list:
     """CLI span fetch: shared fetch, nodes re-wrapped as GraphQL edges."""
     nodes = phoenix_client.fetch_spans(
         limit,
         base_url=base_url,
-        config=config if config is not None else _local_config(),
+        config=config if config is not None else _cli_config(project_root),
         timeout=5.0,
         include_context=False,
         client_factory=make_client,
         wait_seconds=wait_seconds,
     )
     return [{"node": node} for node in nodes]
+
+
+def _cli_fetch(args, limit, wait) -> list:
+    """Fetch spans for a command; tolerates limit-only test doubles."""
+    project_root = getattr(args, "project_root", None)
+    try:
+        if wait:
+            return _fetch_spans(limit, wait_seconds=wait, project_root=project_root)
+        return _fetch_spans(limit, project_root=project_root)
+    except TypeError:
+        if wait:
+            return _fetch_spans(limit, wait_seconds=wait)
+        return _fetch_spans(limit)
 
 
 def _format_map(cache: dict) -> str:
@@ -123,7 +153,7 @@ def command_map(args) -> int:
 
 def command_failures(args) -> int:
     wait = getattr(args, "wait", 0) or 0
-    fetched = _fetch_spans(wait_seconds=wait) if wait else _fetch_spans()
+    fetched = _cli_fetch(args, 10, wait)
     spans = [item["node"] for item in fetched if item["node"].get("statusCode") == "ERROR"]
     if not spans:
         print("No recent error spans found.")
@@ -135,7 +165,7 @@ def command_failures(args) -> int:
 
 def command_explain(args) -> int:
     wait = getattr(args, "wait", 0) or 0
-    fetched = _fetch_spans(30, wait_seconds=wait) if wait else _fetch_spans(30)
+    fetched = _cli_fetch(args, 30, wait)
     spans = [item["node"] for item in fetched]
     error = next((span for span in spans if span.get("statusCode") == "ERROR"), None)
     if not error:
@@ -152,7 +182,7 @@ def command_explain(args) -> int:
         print(line)
 
     language = getattr(args, "language", None)
-    config = _local_config()
+    config = _cli_config(getattr(args, "project_root", None))
     enabled = bool(getattr(config, "explainer_enabled", False)) if config else False
     if enabled or language is not None:
         evidence = build_evidence_package(

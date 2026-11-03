@@ -99,6 +99,26 @@ Rules:
 # ---------------------------------------------------------------------------
 
 
+def _flatten_attributes(attrs, prefix=""):
+    """Flatten nested attribute dicts into dotted keys. Never raises.
+
+    Phoenix stores OTel dotted attributes nested (``{"vibe": {...}}``);
+    span fixtures and some producers use flat dotted keys. Both map to
+    the same flat view here.
+    """
+    flat = {}
+    try:
+        for key, value in (attrs or {}).items():
+            full = f"{prefix}.{key}" if prefix else str(key)
+            if isinstance(value, dict):
+                flat.update(_flatten_attributes(value, full))
+            else:
+                flat[full] = value
+    except Exception:
+        return flat
+    return flat
+
+
 def parse_span_attributes(span):
     """Tolerantly parse a span's attributes (dict or JSON string). Never raises."""
     try:
@@ -106,13 +126,78 @@ def parse_span_attributes(span):
             return {}
         attrs = span.get("attributes")
         if isinstance(attrs, dict):
-            return dict(attrs)
+            return _flatten_attributes(attrs)
         if isinstance(attrs, str):
             parsed = json.loads(attrs) if attrs.strip() else {}
-            return parsed if isinstance(parsed, dict) else {}
+            return _flatten_attributes(parsed) if isinstance(parsed, dict) else {}
         return {}
     except Exception:
         return {}
+
+
+def _exception_details(span, attrs):
+    """(error_type, error_message) from attrs, exception events, status.
+
+    Phoenix keeps exception detail in span ``exception`` events and in
+    ``statusMessage`` (``"<Type>: <message>"``); producers set only
+    ``error.type`` as an attribute. Any source may be absent. Never raises.
+    """
+    try:
+        error_type = attrs.get("error.type") or attrs.get("exception.type") or None
+        error_message = attrs.get("error.message") or attrs.get("exception.message") or None
+        events = span.get("events") if isinstance(span, dict) else None
+        for event in events or []:
+            if not isinstance(event, dict):
+                continue
+            eattrs = event.get("attributes")
+            if isinstance(eattrs, str):
+                try:
+                    eattrs = json.loads(eattrs) if eattrs.strip() else {}
+                except Exception:
+                    eattrs = {}
+            if not isinstance(eattrs, dict):
+                continue
+            flat = _flatten_attributes(eattrs)
+            if event.get("name") != "exception" and not (
+                flat.get("exception.type") or flat.get("exception.message")
+            ):
+                continue
+            error_type = error_type or flat.get("exception.type") or None
+            error_message = error_message or flat.get("exception.message") or None
+            if error_type and error_message:
+                break
+        if not error_message and isinstance(span, dict):
+            status_message = span.get("statusMessage")
+            if isinstance(status_message, str) and status_message.strip():
+                text = status_message.strip()
+                if text != "Silent Failure detected":
+                    if error_type and text.startswith(f"{error_type}: "):
+                        text = text[len(error_type) + 2:]
+                    error_message = text
+        return error_type, error_message
+    except Exception:
+        return None, None
+
+
+def _has_recorded_exception(span, attrs):
+    """True when the span carries exception evidence (attr/event/status)."""
+    try:
+        if attrs.get("error.type") or attrs.get("exception.type"):
+            return True
+        error_type, _ = _exception_details(span, attrs)
+        if error_type:
+            return True
+        if isinstance(span, dict):
+            status_message = span.get("statusMessage")
+            if (
+                isinstance(status_message, str)
+                and status_message.strip()
+                and status_message.strip() != "Silent Failure detected"
+            ):
+                return True
+        return False
+    except Exception:
+        return False
 
 
 def select_failure_span(spans):
@@ -130,7 +215,7 @@ def _is_silent_failure(span, attrs):
     try:
         if not isinstance(span, dict) or span.get("statusCode") != "ERROR":
             return False
-        if attrs.get("error.type"):
+        if _has_recorded_exception(span, attrs):
             return False
         output = attrs.get("vibe.output", attrs.get("vibe.output_preview", ""))
         return str(output) in ("None", "[]", "{}", "''", '""', "")
@@ -230,11 +315,17 @@ def build_evidence_package(
         except (TypeError, ValueError):
             duration_ms = None
 
-        error_message = None
-        for key in ("error.message", "exception.message"):
-            if safe_attrs.get(key):
-                error_message = redact_value(safe_attrs[key], max_length=max_attr_length, profile=privacy_profile)
-                break
+        raw_error_type, raw_error_message = _exception_details(source, attrs)
+        error_type = (
+            redact_value(raw_error_type, max_length=max_attr_length, profile=privacy_profile)
+            if raw_error_type
+            else None
+        )
+        error_message = (
+            redact_value(raw_error_message, max_length=max_attr_length, profile=privacy_profile)
+            if raw_error_message
+            else None
+        )
 
         related = []
         for rel in _related_spans(source, list(related_spans or []), limit=max_related):
@@ -251,7 +342,7 @@ def build_evidence_package(
         package = {
             "function": str(source.get("name", "unknown")),
             "status": str(source.get("statusCode", "unknown")),
-            "error_type": safe_attrs.get("error.type") or None,
+            "error_type": error_type,
             "error_message": error_message,
             "duration_ms": duration_ms,
             "file": safe_attrs.get("vibe.file"),
@@ -549,7 +640,9 @@ def explain_failure(
             # Disabled configuration means no API call is attempted,
             # unless the caller explicitly requested a language.
             call = None
-        if call is None and enabled:
+        if call is None and (enabled or explicit is not None):
+            # An explicit language request is the opt-in: attempt one
+            # live call (credential permitting) even when disabled.
             call = _default_http_client(config)
         if call is None:
             return {

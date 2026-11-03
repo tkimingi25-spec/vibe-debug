@@ -25,8 +25,9 @@ def _span_query(limit, include_context):
             spans(first: {limit}, sort: {{col: startTime, dir: desc}}) {{
               edges {{
                 node {{
-                  name statusCode latencyMs
-                  startTime attributes{extra}
+                  name statusCode statusMessage latencyMs
+                  startTime attributes
+                  events {{ name timestamp attributes }}{extra}
                 }}
               }}
             }}

@@ -7,3 +7,15 @@ otlp_endpoint = "http://localhost:6006/v1/traces"
 [watch]
 modules = ["retriever", "processor", "generator"]
 ignore_functions = ["__init__", "__repr__", "__str__"]
+
+# Optional Muse Spark AI explanations. Disabled by default: normal
+# `explain` makes no paid external calls. An explicit
+# `vibe-debug explain --language en|sw` request is the opt-in and
+# attempts one live call (credential permitting) even while disabled.
+# The credential comes only from the MUSE_SPARK_API_KEY environment
+# variable; never put an API key in this file.
+[explainer]
+enabled = false
+model = "muse-spark-1.3"
+endpoint = "https://api.meta.ai/v1/chat/completions"
+timeout_seconds = 60
