@@ -9,9 +9,10 @@ from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
 
 from vibe_debug.redaction import redact_url, redact_value
+from vibe_debug.tracer import get_active_tracer
 
 
-def _redact_body(body, max_length=200):
+def _redact_body(body, max_length=200, profile="permissive"):
     """Redact a request body for a span attribute; never raises.
 
     Dict/list bodies are walked by key name via ``redact_value``.
@@ -36,8 +37,8 @@ def _redact_body(body, max_length=200):
             except Exception:
                 parsed = None
             if isinstance(parsed, (dict, list)):
-                return redact_value(parsed, max_length=max_length)
-        return redact_value(candidate, max_length=max_length)
+                return redact_value(parsed, max_length=max_length, profile=profile)
+        return redact_value(candidate, max_length=max_length, profile=profile)
     except Exception:
         return "<unrepresentable>"
 
@@ -55,15 +56,31 @@ class IOInterceptor:
     Captures: URL, method, status code, latency, host, error.
     """
 
-    def __init__(self, project_name: str = "vibe-debug"):
+    def __init__(self, project_name: str = "vibe-debug", config=None, privacy_profile=None):
         self.project_name = project_name
-        self._tracer = trace.get_tracer(
-            "vibe_debug.runtime.io_interceptor"
-        )
+        if privacy_profile is not None:
+            self._privacy_profile = privacy_profile
+        elif config is not None:
+            self._privacy_profile = getattr(config, "privacy_profile", "permissive")
+        else:
+            self._privacy_profile = "permissive"
+        self._tracer_override = None
         self._active_patches = []
         self._call_count = 0
         self._active = False
         self._patch_results = {}
+
+    @property
+    def _tracer(self):
+        # Dynamic: resolved per use so reset+re-init re-points this
+        # component. Tests may inject a fake via the setter.
+        if self._tracer_override is not None:
+            return self._tracer_override
+        return get_active_tracer("vibe_debug.runtime.io_interceptor")
+
+    @_tracer.setter
+    def _tracer(self, value):
+        self._tracer_override = value
 
     def start(self, patch_socket: bool = True):
         if self._active:
@@ -163,7 +180,6 @@ class IOInterceptor:
         try:
             original_connect = socket.socket.connect
             interceptor = self
-            tracer = self._tracer
             interceptor._network_calls = getattr(
                 interceptor, "_network_calls", 0
             )
@@ -173,7 +189,7 @@ class IOInterceptor:
                 host = address[0] if address else "unknown"
                 port = address[1] if len(address) > 1 else 0
 
-                with tracer.start_as_current_span("tcp.connect") as span:
+                with interceptor._tracer.start_as_current_span("tcp.connect") as span:
                     span.set_attribute("vibe.type", "network")
                     span.set_attribute("tcp.host", str(host))
                     span.set_attribute("tcp.port", int(port))
@@ -303,13 +319,13 @@ class IOInterceptor:
         with self._tracer.start_as_current_span(span_name) as span:
             span.set_attribute("vibe.type", "http_call")
             span.set_attribute("http.method", method.upper())
-            span.set_attribute("http.url", redact_url(url_str, max_length=500))
+            span.set_attribute("http.url", redact_url(url_str, max_length=500, profile=getattr(self, "_privacy_profile", "permissive")))
             span.set_attribute("http.host", hostport)
 
             body = kwargs.get("json") or kwargs.get("data") or ""
             if body:
                 span.set_attribute(
-                    "http.request_preview", _redact_body(body, max_length=200)
+                    "http.request_preview", _redact_body(body, max_length=200, profile=getattr(self, "_privacy_profile", "permissive"))
                 )
 
             start = time.time()

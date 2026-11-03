@@ -184,6 +184,7 @@ def build_evidence_package(
     max_related=5,
     redact_keys=(),
     max_attr_length=1024,
+    privacy_profile="permissive",
 ):
     """Build a small, redacted, JSON-serializable evidence package.
 
@@ -198,7 +199,7 @@ def build_evidence_package(
         for key, value in attrs.items():
             if isinstance(value, (str, dict, list, tuple, set)):
                 safe_attrs[key] = redact_value(
-                    value, key=key, extra_keys=redact_keys, max_length=max_attr_length
+                    value, key=key, extra_keys=redact_keys, max_length=max_attr_length, profile=privacy_profile
                 )
             else:
                 safe_attrs[key] = value
@@ -216,9 +217,9 @@ def build_evidence_package(
                     if isinstance(parsed, (dict, list)):
                         # Structured preview: redact nested values by key.
                         return redact_value(
-                            parsed, extra_keys=redact_keys, max_length=max_attr_length
+                            parsed, extra_keys=redact_keys, max_length=max_attr_length, profile=privacy_profile
                         )
-                return redact_value(value, max_length=max_attr_length)
+                return redact_value(value, max_length=max_attr_length, profile=privacy_profile)
             return None
 
         duration = source.get("latencyMs")
@@ -232,7 +233,7 @@ def build_evidence_package(
         error_message = None
         for key in ("error.message", "exception.message"):
             if safe_attrs.get(key):
-                error_message = redact_value(safe_attrs[key], max_length=max_attr_length)
+                error_message = redact_value(safe_attrs[key], max_length=max_attr_length, profile=privacy_profile)
                 break
 
         related = []
@@ -414,6 +415,31 @@ def render_explanation(structured, language="en"):
     return "\n".join(lines)
 
 
+def _has_unknown_citation(structured, evidence):
+    """True if quoted identifiers cite content absent from the evidence.
+
+    Deterministic citation check only: every quoted token in the
+    model's evidence items must occur in the serialized submitted
+    evidence package. This permits citations of span names, evidence
+    fields, JSON keys, status values, and preview contents that were
+    actually submitted, while still rejecting invented identifiers.
+    File paths (containing '/') are not treated as span citations.
+    This checks citation tokens only; it does not fact-check the
+    explanation's interpretation.
+    """
+    try:
+        import re as _re
+
+        serialized = json.dumps(evidence or {}, ensure_ascii=False, default=str)
+        for item in (structured or {}).get("evidence", []):
+            for token in _re.findall(r"['\"]([A-Za-z_][\w.]*)['\"]", str(item)):
+                if "/" not in token and token not in serialized:
+                    return True
+        return False
+    except Exception:
+        return False
+
+
 def _extract_structured(payload):
     """Extract + validate the structured object from a provider payload."""
     if isinstance(payload, dict) and "summary" in payload:
@@ -544,6 +570,14 @@ def explain_failure(
         payload = call(request)
         _ = started
         structured = _extract_structured(payload)
+        if structured is not None and _has_unknown_citation(structured, evidence):
+            return {
+                "language": canonical,
+                "source": "fallback",
+                "structured": None,
+                "text": fallback,
+                "error": "explanation cited unknown spans",
+            }
         if structured is None:
             return {
                 "language": canonical,

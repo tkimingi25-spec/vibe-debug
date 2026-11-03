@@ -77,6 +77,8 @@ def fetch_spans(
     timeout=10.0,
     include_context=False,
     client_factory=None,
+    wait_seconds=0,
+    poll_interval_seconds=0.5,
 ):
     """Fetch spans from Phoenix via GraphQL and return them sorted.
 
@@ -88,6 +90,37 @@ def fetch_spans(
     (``KeyError``/``TypeError``/``ValueError``); callers that
     historically swallowed broader exceptions wrap this accordingly.
     """
+    # Bounded polling for Phoenix ingestion lag: only re-runs the
+    # existing single fetch; semantics, sorting, and shapes unchanged.
+    import time as _time
+
+    deadline = _time.monotonic() + max(0.0, float(wait_seconds or 0))
+    while True:
+        result = _fetch_spans_once(
+            limit,
+            base_url=base_url,
+            config=config,
+            timeout=timeout,
+            include_context=include_context,
+            client_factory=client_factory,
+        )
+        if result:
+            return result
+        remaining = deadline - _time.monotonic()
+        if remaining <= 0:
+            return result
+        _time.sleep(min(max(0.05, float(poll_interval_seconds or 0.5)), remaining))
+
+
+def _fetch_spans_once(
+    limit,
+    *,
+    base_url=None,
+    config=None,
+    timeout=10.0,
+    include_context=False,
+    client_factory=None,
+):
     query = _span_query(limit, include_context)
     try:
         data = _post_graphql(

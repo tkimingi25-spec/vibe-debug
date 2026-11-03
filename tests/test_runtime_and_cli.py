@@ -29,7 +29,7 @@ def test_async_decorator_awaits_and_returns_value():
         await asyncio.sleep(0)
         return {"value": value}
 
-    with patch("vibe_debug.decorators.trace.get_tracer", return_value=tracer):
+    with patch("vibe_debug.decorators.get_active_tracer", return_value=tracer):
         assert asyncio.run(fetch("answer")) == {"value": "answer"}
 
     span.set_attribute.assert_any_call("vibe.output", "{'value': 'answer'}")
@@ -42,7 +42,7 @@ def test_async_decorator_reraises_exception():
     async def explode():
         raise ValueError("boom")
 
-    with patch("vibe_debug.decorators.trace.get_tracer", return_value=tracer):
+    with patch("vibe_debug.decorators.get_active_tracer", return_value=tracer):
         with pytest.raises(ValueError, match="boom"):
             asyncio.run(explode())
 

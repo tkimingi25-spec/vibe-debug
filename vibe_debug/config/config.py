@@ -20,6 +20,9 @@ class VibeConfig:
     # in vibe_debug.redaction; max_attr_length truncates span attributes.
     max_attr_length: int = 1024
     redact_keys: List[str] = field(default_factory=list)
+    # Privacy profile: permissive (default, current behaviour) /
+    # balanced (pattern scanning) / strict (balanced + payload keys).
+    privacy_profile: str = "permissive"
     # Optional Muse Spark explainer (Stage 2). Credentials are never
     # stored here; they come only from the MUSE_SPARK_API_KEY env var.
     explainer_enabled: bool = False
@@ -53,6 +56,10 @@ def load_config(config_path: str = "vibedebug.toml") -> VibeConfig:
             "max_attr_length", 1024
         ),
         redact_keys=data.get("redaction", {}).get("redact_keys", []),
+        privacy_profile=str(
+            data.get("redaction", {}).get("privacy_profile", "permissive")
+            or "permissive"
+        ).strip().lower(),
         explainer_enabled=bool(data.get("explainer", {}).get("enabled", False)),
         explainer_model=data.get("explainer", {}).get("model", "muse-spark-1.3"),
         explainer_endpoint=data.get("explainer", {}).get(

@@ -241,6 +241,29 @@ def test_init_reset_reinit_objective(clean_tracer_state):
     assert tracer_module._health_exporter.delegate is mem_b
 
 
+def test_second_init_warns_and_keeps_first_provider(clean_tracer_state, capsys):
+    mem_a = InMemorySpanExporter()
+    tracer_a = init_vibedebug("second-init-a", exporter=mem_a)
+    provider_a = current_provider()
+    capsys.readouterr()
+
+    mem_b = InMemorySpanExporter()
+    tracer_b = init_vibedebug("second-init-b", exporter=mem_b)  # must not raise
+    out = capsys.readouterr().out
+    assert "Tracer already initialized; new settings ignored" in out
+    assert "reset_tracer()" in out
+    assert current_provider() is provider_a
+
+    _emit(tracer_b, provider_a, "still_to_a")
+    assert [s.name for s in mem_a.get_finished_spans()] == ["still_to_a"]
+    assert mem_b.get_finished_spans() == ()
+
+    reset_tracer()
+    tracer_c = init_vibedebug("second-init-c", exporter=mem_b)
+    _emit(tracer_c, current_provider(), "now_to_b")
+    assert [s.name for s in mem_b.get_finished_spans()] == ["now_to_b"]
+
+
 def test_health_state_reset(clean_tracer_state):
     mem = InMemorySpanExporter()
     tracer = init_vibedebug("health-reset", exporter=mem)

@@ -1,13 +1,25 @@
 """Redact and truncate values before they become span attributes.
 
-Key-name-based redaction only: no content scanning. Positional
-arguments matched to declared parameter names via ``inspect.signature``
-ARE redacted by that parameter name; ``*args`` and
-unknown-signature positionals are NOT. Secrets embedded inside
-free-text values under non-sensitive keys (e.g. "use key sk-..."
-inside a ``query`` string) are not detected. ``prompt`` and similar
-payload fields are not redacted by default; add them via
-``redact_keys`` / ``VibeConfig``.
+Default profile ``permissive`` is key-name-based only: no content
+scanning. Positional arguments matched to declared parameter names
+via ``inspect.signature`` ARE redacted by that parameter name;
+``*args`` and unknown-signature positionals are NOT under the default
+profile. Secrets embedded inside free-text values under
+non-sensitive keys (e.g. "use key sk-..." inside a ``query`` string)
+are not detected under ``permissive``. ``prompt`` and similar payload
+fields are not redacted by default; add them via ``redact_keys`` /
+``VibeConfig``, or select a privacy profile:
+
+- ``permissive``: current behaviour (key-name matching only);
+- ``balanced``: permissive plus deterministic pattern scanning for
+  Bearer tokens, private-key blocks, JWTs, and common API-key
+  prefixes in the rendered text;
+- ``strict``: balanced plus payload keys (``prompt``, ``messages``,
+  ``content``, ``input``, ``output``) redacted by key name.
+
+Patterns can false-positive on lookalike non-secret strings (e.g. a
+JWT-shaped example or an ``sk-``-prefixed identifier); that is the
+documented trade-off of ``balanced``/``strict``.
 
 Fail-closed for privacy, fail-safe for execution: this module never
 raises, never invokes user ``__eq__``, and on any stringification
@@ -54,6 +66,60 @@ _SENSITIVE_PAIRS = frozenset(
 _SENSITIVE_LAST_SEGMENT = frozenset(
     {"password", "passwd", "authorization", "cookie"}
 )
+
+PRIVACY_PROFILES = ("permissive", "balanced", "strict")
+STRICT_PAYLOAD_KEYS = ("prompt", "messages", "content", "input", "output")
+
+_PATTERN_SUBS = (
+    (
+        re.compile(
+            r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----",
+            re.DOTALL,
+        ),
+        REDACTED,
+    ),
+    (re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._\-+/=]{8,}"), "Bearer ***"),
+    (
+        re.compile(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b"),
+        REDACTED,
+    ),
+    (
+        re.compile(
+            r"\b(?:sk-[A-Za-z0-9_-]{8,}|ghp_[A-Za-z0-9]{8,}|gho_[A-Za-z0-9]{8,}"
+            r"|github_pat_[A-Za-z0-9_]{8,}|AKIA[0-9A-Z]{16}"
+            r"|xox[baprs]-[A-Za-z0-9-]{8,})\b"
+        ),
+        REDACTED,
+    ),
+)
+
+
+def normalize_profile(profile):
+    """Return a known privacy profile; unknown values fall back safely."""
+    try:
+        value = str(profile or "permissive").strip().lower()
+    except Exception:
+        return "permissive"
+    return value if value in PRIVACY_PROFILES else "permissive"
+
+
+def _effective_extra_keys(extra_keys, profile):
+    keys = list(extra_keys or ())
+    if normalize_profile(profile) == "strict":
+        keys.extend(STRICT_PAYLOAD_KEYS)
+    return tuple(keys)
+
+
+def redact_patterns(text):
+    """Redact recognisable secret patterns in text; never raises."""
+    try:
+        if not isinstance(text, str):
+            text = str(text)
+        for pattern, replacement in _PATTERN_SUBS:
+            text = pattern.sub(replacement, text)
+        return text
+    except Exception:
+        return "<unrepresentable>"
 
 
 def _compact(text):
@@ -167,7 +233,7 @@ def _redact_query_like(text, extra_keys=()):
     return "&".join(parts)
 
 
-def redact_url(url, *, extra_keys=(), max_length=500):
+def redact_url(url, *, extra_keys=(), max_length=500, profile="permissive"):
     """Return a redacted, truncated URL string; never raises, never leaks.
 
     Query-string values whose parameter name is sensitive (per the same
@@ -190,24 +256,28 @@ def redact_url(url, *, extra_keys=(), max_length=500):
             if ":" in userinfo:
                 username = userinfo.split(":", 1)[0]
                 netloc = f"{username}:{REDACTED}@{hostport}"
+        effective = _effective_extra_keys(extra_keys, profile)
         rebuilt = urlunparse(
             parsed._replace(
                 netloc=netloc,
-                query=_redact_query_like(parsed.query, extra_keys),
-                fragment=_redact_query_like(parsed.fragment, extra_keys),
+                query=_redact_query_like(parsed.query, effective),
+                fragment=_redact_query_like(parsed.fragment, effective),
             )
         )
+        if normalize_profile(profile) != "permissive":
+            rebuilt = redact_patterns(rebuilt)
         return _truncate(rebuilt, max_length)
     except Exception:
         return _truncate("<unrepresentable>", max_length)
 
 
-def redact_value(value, key=None, *, extra_keys=(), max_length=1024):
+def redact_value(value, key=None, *, extra_keys=(), max_length=1024, profile="permissive"):
     """Return a safe string representation of value for a span attribute."""
     try:
-        if _is_sensitive_key(key, extra_keys):
+        effective = _effective_extra_keys(extra_keys, profile)
+        if _is_sensitive_key(key, effective):
             return REDACTED
-        walked = _walk(value, key, extra_keys, 0, frozenset())
+        walked = _walk(value, key, effective, 0, frozenset())
         if isinstance(walked, str):
             text = walked
         else:
@@ -220,6 +290,8 @@ def redact_value(value, key=None, *, extra_keys=(), max_length=1024):
                 )
         if not isinstance(text, str):
             text = str(type(value).__name__)
+        if normalize_profile(profile) != "permissive":
+            text = redact_patterns(text)
         return _truncate(text, max_length)
     except Exception:
         try:

@@ -8,6 +8,7 @@ from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
 
 from vibe_debug.redaction import redact_value
+from vibe_debug.tracer import get_active_tracer
 
 
 class RelevanceFilter:
@@ -120,12 +121,25 @@ class UniversalRuntimeTracer:
         # defaults match VibeConfig defaults (1024 / no extra keys).
         self._redact_keys = list(getattr(config, "redact_keys", ()) or ())
         self._max_attr_length = getattr(config, "max_attr_length", 1024)
+        self._privacy_profile = getattr(config, "privacy_profile", "permissive")
         self.filter = RelevanceFilter(project_root)
-        self._tracer = trace.get_tracer("vibe_debug.runtime.sys_tracer")
+        self._tracer_override = None
         self._active = False
         self._local = threading.local()
         self._call_count = 0
         self._span_count = 0
+
+    @property
+    def _tracer(self):
+        # Dynamic: resolved per use so reset_tracer()+re-init re-points
+        # this component. Tests may inject a fake via the setter.
+        if self._tracer_override is not None:
+            return self._tracer_override
+        return get_active_tracer("vibe_debug.runtime.sys_tracer")
+
+    @_tracer.setter
+    def _tracer(self, value):
+        self._tracer_override = value
 
     def start(self):
         """Activate universal tracing."""
@@ -196,6 +210,7 @@ class UniversalRuntimeTracer:
                 locals_preview,
                 extra_keys=self._redact_keys,
                 max_length=self._max_attr_length,
+                profile=self._privacy_profile,
             )
         except Exception:
             input_preview = ""
@@ -238,6 +253,7 @@ class UniversalRuntimeTracer:
                     return_value,
                     extra_keys=self._redact_keys,
                     max_length=self._max_attr_length,
+                    profile=self._privacy_profile,
                 ),
             )
 

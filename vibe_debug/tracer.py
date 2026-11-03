@@ -1,6 +1,8 @@
+import json
 import os
 import threading
 import time
+from pathlib import Path
 
 from dotenv import load_dotenv
 from opentelemetry import trace
@@ -24,6 +26,33 @@ _state_lock = threading.RLock()
 
 _MAX_ERROR_LENGTH = 200
 
+EXPORT_HEALTH_FILENAME = ".vibe_export_health.json"
+EXPORT_HEALTH_STALE_AFTER_SECONDS = 3600
+
+
+def _export_health_path() -> Path:
+    return Path.cwd() / EXPORT_HEALTH_FILENAME
+
+
+def read_persisted_export_health(path=None):
+    """Read the persisted export-health snapshot, or None. Never raises.
+
+    Corrupt/partial files degrade to None (doctor then reports the
+    pre-initialisation state). Adds ``age_seconds`` and ``stale``.
+    """
+    try:
+        target = Path(path) if path is not None else _export_health_path()
+        data = json.loads(target.read_text(encoding="utf-8"))
+        if not isinstance(data, dict) or "status" not in data:
+            return None
+        timestamp = float(data.get("timestamp") or 0)
+        age = max(0.0, time.time() - timestamp) if timestamp else None
+        data["age_seconds"] = age
+        data["stale"] = bool(age is not None and age > EXPORT_HEALTH_STALE_AFTER_SECONDS)
+        return data
+    except Exception:
+        return None
+
 
 class HealthRecordingExporter(SpanExporter):
     """Delegate to a SpanExporter and record actual export outcomes.
@@ -36,8 +65,10 @@ class HealthRecordingExporter(SpanExporter):
     text. All state is guarded by a lock; snapshots are copies.
     """
 
-    def __init__(self, delegate):
+    def __init__(self, delegate, *, state_file=None, endpoint=None):
         self._delegate = delegate
+        self._state_file = Path(state_file) if state_file is not None else None
+        self._endpoint = endpoint
         self._lock = threading.Lock()
         self._successes = 0
         self._failures = 0
@@ -63,11 +94,32 @@ class HealthRecordingExporter(SpanExporter):
             self._record_failure(f"export returned {name}")
         return result
 
+    def _persist_locked(self):
+        """Persist a metadata-only snapshot atomically. Never raises."""
+        if self._state_file is None:
+            return
+        try:
+            snapshot = {
+                "timestamp": time.time(),
+                "status": self._last_status,
+                "successes": self._successes,
+                "failures": self._failures,
+                "last_error": self._last_error,
+                "endpoint": self._endpoint,
+                "writer_pid": os.getpid(),
+            }
+            tmp_path = self._state_file.with_name(self._state_file.name + ".tmp")
+            tmp_path.write_text(json.dumps(snapshot), encoding="utf-8")
+            os.replace(tmp_path, self._state_file)
+        except Exception:
+            pass
+
     def _record_success(self):
         with self._lock:
             self._successes += 1
             self._last_success_at = time.time()
             self._last_status = "ok"
+            self._persist_locked()
 
     def _record_failure(self, error_text):
         text = str(error_text)[:_MAX_ERROR_LENGTH] if error_text else "unknown error"
@@ -76,6 +128,7 @@ class HealthRecordingExporter(SpanExporter):
             self._last_failure_at = time.time()
             self._last_error = text
             self._last_status = "failed"
+            self._persist_locked()
 
     def get_export_health(self) -> dict:
         """Return a thread-safe snapshot copy of the export health."""
@@ -173,6 +226,10 @@ def init_vibedebug(project_name="vibe-debug", *, exporter=None, endpoint=None):
     global _initialized, _health_exporter, _provider
     with _state_lock:
         if _initialized:
+            print(
+                "[vibe-debug] Tracer already initialized; new settings "
+                "ignored. Call reset_tracer() before re-initializing."
+            )
             return get_active_tracer(__name__)
 
         otlp_endpoint = endpoint or os.getenv(
@@ -192,7 +249,9 @@ def init_vibedebug(project_name="vibe-debug", *, exporter=None, endpoint=None):
                 else OTLPSpanExporter(
                     endpoint=otlp_endpoint,
                     headers={}
-                )
+                ),
+                state_file=_export_health_path(),
+                endpoint=otlp_endpoint,
             )
             _health_exporter = health_exporter
             processor = BatchSpanProcessor(

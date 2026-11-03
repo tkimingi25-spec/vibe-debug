@@ -9,7 +9,7 @@ from vibe_debug.redaction import redact_value
 from vibe_debug.tracer import get_active_tracer
 
 
-def _is_silent_failure(result) -> bool:
+def _is_silent_failure(result, silent_if=None) -> bool:
     """Return True for None and empty built-in containers/str.
 
     Never invokes user-defined ``__eq__``/``__bool__``/``__len__`` on
@@ -18,8 +18,25 @@ def _is_silent_failure(result) -> bool:
     types (e.g. NumPy/pandas) are no longer flagged, because detecting
     them would require calling code that can raise (e.g. ambiguous
     array truth value). This is deliberate.
+
+    Opt-in ``silent_if`` predicate (per-decorator): called inside the
+    same never-raising guard. A predicate that raises is treated as
+    "not flagged by the predicate" and can never break the traced
+    call. Passing the builtin ``len`` as the predicate means
+    ``len(result) == 0`` (for Sized results); the integer comparison
+    is on the builtin int returned by ``len``, so no user ``__eq__``
+    is invoked. Any other callable is used as a truthiness predicate.
     """
     try:
+        if silent_if is not None:
+            try:
+                if silent_if is len:
+                    if len(result) == 0:
+                        return True
+                elif silent_if(result):
+                    return True
+            except Exception:
+                pass
         if result is None:
             return True
         if isinstance(result, (list, dict, str, tuple, set, frozenset)):
@@ -48,7 +65,7 @@ def _parameter_names(func):
     return names, var_positional
 
 
-def vibetrace(component_type: str, config=None, *, redact_keys=(), max_attr_length=None):
+def vibetrace(component_type: str, config=None, *, redact_keys=(), max_attr_length=None, privacy_profile=None, silent_if=None):
     """Capture inputs, outputs, failures, and timing for a function call.
 
     ``vibe.input``/``vibe.output`` pass through redaction (see
@@ -61,6 +78,12 @@ def vibetrace(component_type: str, config=None, *, redact_keys=(), max_attr_leng
     ``config`` is an optional VibeConfig; its redact_keys extend the
     defaults and its max_attr_length caps attribute length. Explicit
     decorator arguments override the config values.
+    ``silent_if`` is an optional per-decorator predicate: when it
+    returns truthy for a result, the result is flagged as a silent
+    failure. It is evaluated inside a never-raising guard, so a
+    raising predicate can never break the traced call. Passing
+    ``silent_if=len`` flags Sized results with ``len(result) == 0``.
+    Without ``silent_if``, only structural emptiness is flagged.
     """
 
     def decorator(func):
@@ -75,6 +98,12 @@ def vibetrace(component_type: str, config=None, *, redact_keys=(), max_attr_leng
             effective_max = getattr(config, "max_attr_length", 1024)
         else:
             effective_max = 1024
+        if privacy_profile is not None:
+            effective_profile = privacy_profile
+        elif config is not None:
+            effective_profile = getattr(config, "privacy_profile", "permissive")
+        else:
+            effective_profile = "permissive"
 
         def apply_metadata(span, args, kwargs):
             span.set_attribute("vibe.type", component_type or "unknown")
@@ -91,6 +120,7 @@ def vibetrace(component_type: str, config=None, *, redact_keys=(), max_attr_leng
                     key=name,
                     extra_keys=extra_keys,
                     max_length=effective_max,
+                    profile=effective_profile,
                 )
                 parts.append(f"{name}={rendered}" if name else rendered)
             for key, value in kwargs.items():
@@ -99,12 +129,13 @@ def vibetrace(component_type: str, config=None, *, redact_keys=(), max_attr_leng
                     key=key,
                     extra_keys=extra_keys,
                     max_length=effective_max,
+                    profile=effective_profile,
                 )
                 parts.append(f"{key}={rendered}")
             joined = ", ".join(parts)
             span.set_attribute(
                 "vibe.input",
-                redact_value(joined, max_length=effective_max),
+                redact_value(joined, max_length=effective_max, profile=effective_profile),
             )
 
             try:
@@ -129,10 +160,11 @@ def vibetrace(component_type: str, config=None, *, redact_keys=(), max_attr_leng
                     result,
                     extra_keys=extra_keys,
                     max_length=effective_max,
+                    profile=effective_profile,
                 ),
             )
             span.set_attribute("execution_time_ms", execution_time)
-            if _is_silent_failure(result):
+            if _is_silent_failure(result, silent_if):
                 span.set_status(
                     Status(StatusCode.ERROR, description="Silent Failure detected")
                 )

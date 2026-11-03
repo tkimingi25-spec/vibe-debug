@@ -284,7 +284,7 @@ def launch_server(host=None, port=None, timeout=30, project_root=".") -> bool:
     return False
 
 
-def stop_server(project_root=".") -> bool:
+def stop_server(project_root=".", force=False) -> bool:
     """Stop only the Phoenix process that this project started.
 
     The recorded PID is signalled ONLY after its identity is verified
@@ -319,10 +319,26 @@ def stop_server(project_root=".") -> bool:
         pid_path.unlink(missing_ok=True)
         return False
     if identity != "verified":
+        if force and identity == "unavailable":
+            print(
+                f"[vibe-debug] WARNING: process identity for PID {pid} could "
+                "NOT be verified. --force was given; signalling PID "
+                f"{pid} anyway. This may terminate an unrelated process."
+            )
+            try:
+                os.kill(pid, signal.SIGTERM)
+                print(f"[vibe-debug] Signalled unverified PID {pid} (--force).")
+            except OSError as error:
+                print(f"[vibe-debug] Could not stop managed Phoenix: {error}")
+                return False
+            finally:
+                pid_path.unlink(missing_ok=True)
+            return True
         print(
             f"[vibe-debug] WARNING: cannot verify that PID {pid} is the "
             "Phoenix process Vibe-Debug started (no usable fingerprint). "
-            "Refusing to signal it. PID file kept for inspection."
+            "Refusing to signal it. PID file kept for inspection. "
+            "If you are sure this PID is Phoenix, use 'vibe-debug down --force'."
         )
         return False
     # Verified: signal promptly — the verify->signal race window is

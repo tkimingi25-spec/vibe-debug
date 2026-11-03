@@ -6,6 +6,8 @@ from typing import Dict, List, Optional
 from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
 
+from vibe_debug.tracer import get_active_tracer
+
 
 class ComponentStatus(Enum):
     COMPLETED = "COMPLETED"
@@ -76,7 +78,18 @@ class PartialTraceBuilder:
         self.completed_traces: List[PartialTrace] = []
         self.static_map: Dict = {}
         self.import_graph: Dict = {}
-        self._tracer = trace.get_tracer(__name__)
+        self._tracer_override = None
+
+    @property
+    def _tracer(self):
+        # Dynamic: resolved per use so reset+re-init re-points it.
+        if self._tracer_override is not None:
+            return self._tracer_override
+        return get_active_tracer(__name__)
+
+    @_tracer.setter
+    def _tracer(self, value):
+        self._tracer_override = value
 
     def load_static_map(self, pipeline_map_dict: dict):
         """

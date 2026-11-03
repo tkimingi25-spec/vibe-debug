@@ -371,14 +371,46 @@ import os
     os.getenv("VIBE_EXPLAINER_LIVE") != "1" or not os.getenv("MUSE_SPARK_API_KEY"),
     reason="Live Muse Spark evaluation is opt-in only: requires VIBE_EXPLAINER_LIVE=1, verified endpoint/model config, and the credential env var. Skipped by default.",
 )
-def test_live_swahili_evaluation_opt_in():
+def test_live_evaluation_scorecard_opt_in(capsys):
+    """Opt-in live scorecard: en+sw over the 8-fixture pack.
+
+    Machine results only (schema valid, failing span identified, no
+    invented span names via citation validation). Not human review.
+    Makes 16 live calls when enabled; skipped by default.
+    """
     endpoint = os.getenv("MUSE_SPARK_ENDPOINT")
     model = os.getenv("MUSE_SPARK_MODEL")
     if not endpoint or not model:
         pytest.skip("Live evaluation needs MUSE_SPARK_ENDPOINT and MUSE_SPARK_MODEL")
-    config = cfg(explainer_endpoint=endpoint, explainer_model=model)
-    result = explain_failure(evidence(), language="sw", config=config)
-    assert result["language"] == "sw"
+    from tests.explainer_eval_fixtures import EVAL_FIXTURES
+
+    config = cfg(
+        explainer_endpoint=endpoint, explainer_model=model, explainer_timeout_seconds=60.0
+    )
+    rows = []
+    for fixture in EVAL_FIXTURES:
+        pkg = build_evidence_package(fixture["span"], fixture["related"])
+        for lang in ("en", "sw"):
+            result = explain_failure(pkg, language=lang, config=config, fallback_text="DET")
+            rows.append(
+                {
+                    "fixture": fixture["label"],
+                    "language": lang,
+                    "schema_valid": result.get("source") == "llm",
+                    "span_identified": result.get("source") == "llm"
+                    and "route_query" in (result.get("text") or ""),
+                }
+            )
+    with capsys.disabled():
+        print("\nLIVE EVAL SCORECARD (machine results only):")
+        for row in rows:
+            print(
+                f"  {row['fixture']} [{row['language']}] "
+                f"schema_valid={row['schema_valid']} span_identified={row['span_identified']}"
+            )
+        passed = sum(1 for r in rows if r["schema_valid"] and r["span_identified"])
+        print(f"  score: {passed}/{len(rows)} (calls={len(rows)})")
+    assert rows and all(r["language"] in ("en", "sw") for r in rows)
 
 
 # -- Stage 4: CLI integration ---------------------------------------------------
@@ -641,6 +673,83 @@ def test_flagship_defaults_in_config():
     assert config.explainer_model == "muse-spark-1.3"
     assert config.explainer_endpoint == "https://api.meta.ai/v1/chat/completions"
     assert explainer_module.DEFAULT_MODEL == "muse-spark-1.3"
+
+
+# -- Stage 3 (limitations): timeout enforcement + citation validation -----------
+
+def test_timeout_enforced_by_http_client(monkeypatch):
+    import threading
+    import time as _time
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    from vibe_debug.config.config import VibeConfig as _VC
+
+    class SlowHandler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            _time.sleep(3)
+            body = b"{}"
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), SlowHandler)
+    port = server.server_address[1]
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        config = _VC(
+            explainer_enabled=True,
+            explainer_endpoint=f"http://127.0.0.1:{port}/chat/completions",
+            explainer_timeout_seconds=0.5,
+        )
+        monkeypatch.setenv("MUSE_SPARK_API_KEY", "fake-test-" + "credential")
+        started = _time.monotonic()
+        result = explain_failure(evidence(), config=config, fallback_text="DET")
+        elapsed = _time.monotonic() - started
+        assert result["source"] == "fallback"
+        assert elapsed < 2.5, f"timeout not enforced: {elapsed:.1f}s"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+@pytest.mark.parametrize("lang", ["en", "sw"])
+def test_unknown_span_citation_falls_back(lang):
+    bad = {**VALID, "evidence": ["'nonexistent_span' failed first"]}
+    result = explain_failure(evidence(), language=lang, client=RecordingClient(bad), config=cfg(), fallback_text="DET")
+    assert result["source"] == "fallback"
+    assert result["error"] == "explanation cited unknown spans"
+
+
+@pytest.mark.parametrize("lang", ["en", "sw"])
+def test_real_span_citation_accepted(lang):
+    good = {**VALID, "evidence": ["'route_query' status ERROR", "'call_llm' duration 4680ms"]}
+    pkg = build_evidence_package(
+        make_span(),
+        [make_span(name="call_llm", status="ERROR", latency=4680, span_id="s3")],
+    )
+    result = explain_failure(pkg, language=lang, client=RecordingClient(good), config=cfg())
+    assert result["source"] == "llm"
+
+
+@pytest.mark.parametrize("lang", ["en", "sw"])
+def test_evidence_field_and_status_citations_accepted(lang):
+    # Correction: citing submitted evidence fields / status values is valid.
+    good = {**VALID, "evidence": ["'input_preview' shows the request", "'ERROR' status on 'route_query'"]}
+    result = explain_failure(evidence(), language=lang, client=RecordingClient(good), config=cfg())
+    assert result["source"] == "llm"
+
+
+@pytest.mark.parametrize("lang", ["en", "sw"])
+def test_submitted_json_key_citations_accepted(lang):
+    span = make_span(attrs={"vibe.input": json.dumps({"api_key": "k", "password": "p", "q": "Summarize"})})
+    pkg = build_evidence_package(span, [])
+    good = {**VALID, "evidence": ["keys 'api_key', 'password', 'q' present; 'q' is 'Summarize'"]}
+    result = explain_failure(pkg, language=lang, client=RecordingClient(good), config=cfg())
+    assert result["source"] == "llm"
 
 
 def test_select_failure_span():

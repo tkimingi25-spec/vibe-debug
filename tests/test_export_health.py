@@ -227,6 +227,80 @@ def test_thread_safety():
     assert stub.calls == 100
 
 
+# 11. Persistent export health (Stage 1 of limitations task)
+def test_persisted_snapshot_written_on_success_and_failure(tmp_path):
+    import json as _json
+
+    state = tmp_path / ".vibe_export_health.json"
+    ok = HealthRecordingExporter(StubExporter(SpanExportResult.SUCCESS), state_file=state, endpoint="http://x:1")
+    ok.export([])
+    data = _json.loads(state.read_text(encoding="utf-8"))
+    assert data["status"] == "ok" and data["successes"] == 1 and data["writer_pid"] > 0
+    assert data["endpoint"] == "http://x:1"
+    bad = HealthRecordingExporter(StubExporter(SpanExportResult.FAILURE), state_file=state, endpoint="http://x:1")
+    bad.export([])
+    data = _json.loads(state.read_text(encoding="utf-8"))
+    assert data["status"] == "failed" and data["failures"] == 1 and data["last_error"]
+
+
+def test_persisted_snapshot_fresh_reader_and_stale(tmp_path):
+    import time as _time
+
+    from vibe_debug.tracer import read_persisted_export_health
+
+    state = tmp_path / "health.json"
+    wrapper = HealthRecordingExporter(StubExporter(SpanExportResult.SUCCESS), state_file=state)
+    wrapper.export([])
+    snap = read_persisted_export_health(state)
+    assert snap["status"] == "ok" and snap["stale"] is False
+    # Age it artificially.
+    import json as _json
+
+    data = _json.loads(state.read_text(encoding="utf-8"))
+    data["timestamp"] = _time.time() - 7200
+    state.write_text(_json.dumps(data), encoding="utf-8")
+    snap = read_persisted_export_health(state)
+    assert snap["stale"] is True
+
+    from vibe_debug.cli import _format_persisted_export_health
+
+    assert "stale snapshot" in _format_persisted_export_health(snap)
+
+
+def test_persisted_snapshot_no_secrets_and_corrupt_degrades(tmp_path):
+    from vibe_debug.cli import _export_health_line
+    from vibe_debug.tracer import read_persisted_export_health
+
+    state = tmp_path / "health.json"
+    wrapper = HealthRecordingExporter(StubExporter(SpanExportResult.SUCCESS), state_file=state)
+    wrapper.export([{"secret": "sk-test-" + "should-not-persist"}])
+    text = state.read_text(encoding="utf-8")
+    assert "should-not-persist" not in text
+    assert "sk-test" not in text
+
+    state.write_text("{corrupt", encoding="utf-8")
+    assert read_persisted_export_health(state) is None
+
+
+def test_persisted_snapshot_concurrent_writers(tmp_path):
+    state = tmp_path / "health.json"
+    wrapper = HealthRecordingExporter(StubExporter(SpanExportResult.SUCCESS), state_file=state)
+
+    def call_many():
+        for _ in range(25):
+            wrapper.export([])
+
+    threads = [threading.Thread(target=call_many) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    from vibe_debug.tracer import read_persisted_export_health
+
+    snap = read_persisted_export_health(state)
+    assert snap is not None and snap["successes"] == 100
+
+
 # 10. No regression: normal traced function still spans correctly
 def test_traced_function_still_spans():
     memory = InMemorySpanExporter()

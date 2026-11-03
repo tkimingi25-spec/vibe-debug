@@ -75,7 +75,7 @@ def query_phoenix(query: str, *, base_url: str | None = None):
     )
 
 
-def _fetch_spans(limit: int = 20) -> list:
+def _fetch_spans(limit: int = 20, wait_seconds: float = 0) -> list:
     """Fetch recent spans from Phoenix via GraphQL (shared implementation)."""
     try:
         return phoenix_client.fetch_spans(
@@ -84,6 +84,7 @@ def _fetch_spans(limit: int = 20) -> list:
             timeout=10.0,
             include_context=True,
             client_factory=make_client,
+            wait_seconds=wait_seconds,
         )
     except Exception:
         return []
@@ -106,14 +107,16 @@ def _parse_attrs(span: dict) -> dict:
 def _redact_display(value) -> str:
     """Redact a value for display; JSON strings are redacted by nested key."""
     try:
+        cfg = _bridge_config()
+        profile = getattr(cfg, "privacy_profile", "permissive") if cfg else "permissive"
         if isinstance(value, str):
             try:
                 parsed = json.loads(value)
             except Exception:
                 parsed = None
             if isinstance(parsed, (dict, list)):
-                return json.dumps(redact_value(parsed), default=str)
-        return redact_value(value)
+                return json.dumps(redact_value(parsed, profile=profile), default=str)
+        return redact_value(value, profile=profile)
     except Exception:
         return "<unrepresentable>"
 
@@ -464,6 +467,7 @@ async def why_did_this_fail(language: str | None = None):
             error_span,
             spans,
             max_evidence_size=getattr(config, "explainer_max_evidence_size", 8000),
+            privacy_profile=getattr(config, "privacy_profile", "permissive") if config else "permissive",
         )
         result = explain_failure(
             evidence,

@@ -75,7 +75,7 @@ def start(
         runtime_tracer.start()
         print("[vibe-debug] Universal runtime tracing enabled")
 
-    io_interceptor = IOInterceptor(project_name=config.project_name)
+    io_interceptor = IOInterceptor(project_name=config.project_name, config=config)
     io_interceptor.start(patch_socket=patch_socket)
 
     instrument_all_adapters()

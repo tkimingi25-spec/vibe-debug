@@ -193,9 +193,11 @@ Every traced call records `vibe.input`, `vibe.output`, `vibe.file`, `vibe.line`,
 
 - **Successful span:** status `OK`; the function returned a truthy result.
 - **Exception:** status `ERROR`; the exception is recorded and re-raised.
-- **Silent failure:** status `ERROR` with a `silent_failure:` status detail. A result counts as a silent failure when it is `None`, `False`, numeric zero (`0`, `0.0`, `Decimal("0")`), or an empty `str`/`bytes`/`list`/`tuple`/`dict`/`set`. Truthy results are never silent failures.
+- **Silent failure:** status `ERROR` with a "Silent Failure detected" status detail. By default a result counts as a silent failure when it is `None` or an empty `str`/`list`/`tuple`/`dict`/`set`/`frozenset`. Detection never invokes a result's own `__eq__`/`__bool__`, and never raises.
 
-Deliberately not detected: secrets inside free-text values, failures that return non-empty-but-wrong results, and exceptions raised by a return value's own comparison methods (detection is non-throwing by design — a value whose `__eq__` or `__bool__` raises is treated as not a silent failure and passes through untouched).
+Opt-in per-decorator predicate: `@vibetrace("rag", silent_if=lambda r: isinstance(r, dict) and not r.get("valid"))` flags results your own predicate judges invalid (for example non-empty-but-wrong results). The predicate runs inside the same never-raising guard: a predicate that raises is treated as "not flagged" and can never break the traced call. Passing `silent_if=len` flags Sized results with `len(result) == 0` (including custom `__len__` types not covered by the default structural check).
+
+Deliberately not detected by default: secrets inside free-text values, and failures that return non-empty-but-wrong results (use `silent_if` for those).
 
 ## CLI guide
 
@@ -205,12 +207,12 @@ Global option: `--project-root <path>` (default: current directory) targets a sp
 |---|---|---|
 | `vibe-debug init` | Statically scan the project and generate `vibedebug.toml` | Prints discovered components/entry points |
 | `vibe-debug up` | Start managed Phoenix in the background and wait for health | `Phoenix ready at http://127.0.0.1:6006` |
-| `vibe-debug down` | Stop the managed Phoenix (identity-verified, see lifecycle section) | `Managed Phoenix stopped.` |
+| `vibe-debug down [--force]` | Stop the managed Phoenix (identity-verified, see lifecycle section); `--force` signals an unverifiable recorded PID (dangerous, see lifecycle section) | `Managed Phoenix stopped.` |
 | `vibe-debug status` | Phoenix reachability, project config, cached component count | Counts and project name |
 | `vibe-debug map` | Print discovered entry points, components, call counts, failure statuses | Pipeline component list |
-| `vibe-debug failures` | List recent `ERROR` spans, newest first | `ERROR route_query (5012.0ms) RouterError` style lines |
-| `vibe-debug explain [--language en\|sw]` | Deterministically explain the first recent error span; optional AI explanation (see AI section) | Failure explanation block |
-| `vibe-debug doctor` | Smoke-check Python, config, Phoenix reachability, and this process's export health | `OK`/`WARN` lines plus a `Telemetry export:` line |
+| `vibe-debug failures [--wait <seconds>]` | List recent `ERROR` spans, newest first; `--wait` polls for fresh spans (ingestion lag), default `0` = no wait | `ERROR route_query (5012.0ms) RouterError` style lines |
+| `vibe-debug explain [--language en\|sw] [--wait <seconds>]` | Deterministically explain the first recent error span; optional AI explanation (see AI section); `--wait` polls as above | Failure explanation block |
+| `vibe-debug doctor` | Smoke-check Python, config, Phoenix reachability, export health, and tracing coverage | `OK`/`WARN` lines, a `Telemetry export:` line, and a `Tracing coverage:` section |
 | `vibe-debug mcp` | Run the stdio MCP server for IDE assistants | MCP protocol on stdio |
 
 Common failure conditions: `failures`/`explain` print a "no failures / could not reach Phoenix" style message when Phoenix is not running; `up` reports if Phoenix does not become ready in time. Run `vibe-debug <command> --help` for exact options.
@@ -264,6 +266,7 @@ ignore_functions = ["__init__", "__repr__", "__str__"]
 [redaction]
 max_attr_length = 1024
 redact_keys = []
+privacy_profile = "permissive"
 
 [explainer]
 enabled = false
@@ -278,6 +281,7 @@ Notes on sections:
 
 - `[tracer] otlp_endpoint` is where spans are **sent** (OTLP/HTTP). The Phoenix **query** base URL is derived from it by stripping the path — do not append `/graphql` yourself.
 - `[redaction] redact_keys` **extends** the built-in sensitive-key list (it does not replace it). `[redaction] max_attr_length` truncates span attributes.
+- `[redaction] privacy_profile` selects the redaction profile: `permissive` (default; key-name matching only — today's behaviour), `balanced` (plus deterministic pattern scanning for Bearer tokens, private-key blocks, JWTs, and common API-key prefixes), or `strict` (balanced plus payload keys `prompt`/`messages`/`content`/`input`/`output` redacted by name). Unknown values fall back to `permissive`. See Privacy and security for how to choose.
 - `[explainer]` settings are optional; see the AI section. Never put an API key in this file.
 
 ### Endpoint precedence
@@ -311,9 +315,17 @@ Redaction and truncation behaviour (implemented in `vibe_debug/redaction.py`, ap
 - Key-name-based redaction: keys such as `api_key`/`apikey`/`api-key`, `access_token`/`auth_token`/bare `token`, `client_secret`/bare `secret`, `password`/`passwd`, `authorization`, `private_key`, `cookie`/`set-cookie` are replaced with `***`, case-insensitively, including nested dicts/lists. `token_count` and `secret_count` are **not** redacted (no substring matching).
 - HTTP interception redacts sensitive URL query values, URL authority passwords (`user:***@host`), query-like fragments, and structured request bodies before recording them.
 - Attributes are truncated to the configured `max_attr_length` (default 1024) including the `…[truncated]` marker.
-- Positional arguments matched to declared parameter names are redacted by that name. `*args` and unknown-signature positionals cannot be matched, and secrets inside free-text values under non-sensitive keys are **not** detected — redaction is key-name matching, not content scanning.
-- `prompt`-like fields are **not** redacted by default; add them via `[redaction] redact_keys` (which extends the defaults) if your traces contain sensitive prompts.
+- Positional arguments matched to declared parameter names are redacted by that name. Under the default profile, `*args` and unknown-signature positionals cannot be matched, and secrets inside free-text values under non-sensitive keys are **not** detected — redaction is key-name matching, not content scanning.
+- `prompt`-like fields are **not** redacted by default; add them via `[redaction] redact_keys` (which extends the defaults) if your traces contain sensitive prompts, or use the `strict` profile.
 - Redaction never raises and never falls back to the raw value when a value cannot be stringified.
+
+Privacy profiles (`[redaction] privacy_profile`, default `permissive` — choosing one is a trade-off, so the default does not change existing behaviour):
+
+- `permissive`: key-name matching only, as above.
+- `balanced`: additionally scans the rendered text for recognisable secret patterns — Bearer [REDACTED] (token ≥ 8 chars), `-----BEGIN … PRIVATE KEY-----` blocks, JWT-shaped strings, and common API-key prefixes (`sk-…`, `ghp_…`, `AKIA…`, `xox…`, etc.) — and replaces them with `***`, preserving surrounding text. This applies to span inputs/outputs (including `*args` previews), HTTP URL/body previews, runtime previews, and AI evidence when the profile is configured for that path. Pattern scanning can false-positive: a JWT-shaped documentation example or an `sk-`-prefixed identifier is indistinguishable from a real secret and will be redacted. Short or incomplete lookalikes (two-part JWT fragments, `sk-short`, the bare word `Bearer`) are preserved.
+- `strict`: everything in `balanced`, plus the payload keys `prompt`, `messages`, `content`, `input`, and `output` are redacted by key name — use this if prompts or model payloads must not be stored in Phoenix at all. Expect span previews to become much less informative.
+
+Choose `balanced` if free-text may contain pasted tokens; choose `strict` if prompts/payloads themselves are sensitive; stay on `permissive` if you need full preview fidelity and control key names yourself.
 
 Redaction reduces risk; it does not make traces completely safe. Phoenix stores spans locally on disk, and free-text can still contain anything your code puts in it. Review sensitive traces before sharing them.
 
@@ -325,7 +337,11 @@ Redaction reduces risk; it does not make traces completely safe. Phoenix stores 
 - `Telemetry export: FAILED (last error: <bounded error text>; successes=0, failures=1)`
 - `Telemetry export: no export attempted yet`
 
-Health is recorded from the exporter's real `export()` outcomes (counted per export batch, under a lock), never from a span merely being queued. Two separate concepts appear in `doctor`: **Phoenix reachability** (can this machine talk to Phoenix?) and **this process's export success** (did *this* process's exporter actually deliver?). Export health is per-process: `doctor` in a fresh process will usually say "no export attempted yet" even while another process exports happily.
+Health is recorded from the exporter's real `export()` outcomes (counted per export batch, under a lock), never from a span merely being queued. Two separate concepts appear in `doctor`: **Phoenix reachability** (can this machine talk to Phoenix?) and **export success** (did an exporter actually deliver?).
+
+Each recorded export outcome is also persisted to a project-scoped state file (`.vibe_export_health.json` in the working directory, following the PID-file conventions). It contains only the timestamp, status, success/failure counters, a bounded last-error text, the endpoint, and the writer PID — no span contents and no secrets. Writes are write-temp-then-rename and never raise into the export path. A fresh `doctor` process with no in-process health reads this snapshot and labels it honestly, e.g. `Telemetry export: OK (last success 42s ago, recorded by pid 12345)`; a snapshot older than one hour is labelled `stale snapshot`. A corrupt or partial file degrades to "no export attempted yet" without raising. The snapshot is the most recent recorded outcome, not a live guarantee: it can be stale, and it says nothing about exports after it was written.
+
+`doctor` also prints a `Tracing coverage:` section (local config/cache only — it works with Phoenix down and says so): the watched/configured modules from `[watch] modules`, any configured modules that cannot be found, the auto-instrumentation state, the universal-tracing state in the doctor process itself, and recently observed traced function names from the pipeline cache. If a function produced no span, check here first: its module may not be configured, may not be found, or the app process may never have enabled the relevant tracing.
 
 ## AI explanations and Swahili
 
@@ -356,13 +372,16 @@ Privacy semantics, stated plainly: **requesting an explanation this way sends on
 
 The model must return a validated structure (`summary`, `likely_cause`, `evidence`, `suggested_fix`, `confidence`, `missing_information`); invalid, slow, or failing responses fall back to the deterministic explanation. Identifiers (`route_query`, `TimeoutError`, file paths, JSON keys) are preserved by instruction and by verbatim rendering. Expect live calls to take seconds (about 11–13s observed); each explanation is at most one API call, so cost scales with explanations requested, not with trace volume.
 
-Verification status: mocked English/Swahili rendering is fully tested; one live Swahili response was reviewed by the project user and found satisfactory. Broader live Swahili quality across failure types is still being tested — do not treat the feature as translation-certified. Timeout enforcement on the default transport at the configured `timeout_seconds` default is a known follow-up clarification (observed live latencies exceeded 10s), so do not rely on a hard 10s ceiling yet.
+Verification status: mocked English/Swahili rendering is fully tested; one live Swahili response was reviewed by the project user and found satisfactory. An opt-in live evaluation pack (8 fixed synthetic failure categories × English/Swahili, 16 calls, machine-scored only) was re-run after the citation validator correction: 16/16 responses were schema-valid, citation-accepted, and identified the failing span (English 8/8, Swahili 8/8). The previous 5/16 result primarily measured the overly strict citation validator, which rejected substantively correct evidence-field citations; it was not a measure of model quality. This score is a machine-scored result over eight synthetic categories only: it does not certify overall model or Swahili quality, and Swahili quality remains limited by the small sample and that one user-reviewed response. Machine scores are not human review. Do not treat the feature as translation-certified.
+
+Timeout and citation discipline: the configured `explainer_timeout_seconds` is enforced by the underlying HTTP client (`httpx` timeout on the default transport); a provider call exceeding it returns the deterministic fallback within a bounded time. Responses are also citation-checked deterministically: quoted identifiers in the model's `evidence` must occur in the submitted evidence package — span and function names, status values such as `ERROR`, error types, evidence-field names, JSON keys, and input/output preview keys and values that were actually submitted are all permitted citations; an explanation citing an invented identifier absent from the submitted evidence is rejected and falls back. This checks citation tokens only — it is not complete fact-checking: a correctly citing explanation can still contain an incorrect interpretation, and the remaining hallucination risk stands.
 
 ## Phoenix lifecycle and tracer reset
 
 - `vibe-debug up` launches Phoenix as a managed child process and records a JSON fingerprint (`{version, pid, created, marker}`) in the project-scoped `.vibe_phoenix.pid` file.
 - `vibe-debug down` verifies that the recorded PID is still that same Phoenix process (creation time, plus command-line marker where the platform provides it) **before** signalling it. PIDs are recycled by the OS; an unverified PID is never killed.
-- Stale or mismatched PID files are removed. On platforms where identity cannot be verified — including old plain-integer PID files from previous versions — `down` refuses, keeps the PID file, and you must remove the stale Phoenix process manually. That is the correct safe default: silently killing an unverified PID is precisely the bug this behaviour removes.
+- Stale or mismatched PID files are removed. On platforms where identity cannot be verified — including old plain-integer PID files from previous versions — `down` refuses and keeps the PID file. That is the correct safe default: silently killing an unverified PID is precisely the bug this behaviour removes.
+- Intentional recovery: if you are **sure** the recorded PID is the stale Phoenix process, run `vibe-debug down --force`. It prints a clear warning that identity could NOT be verified, exactly which PID it signalled, and then signals that PID. There is no interactive prompt — the explicit flag is the confirmation. **Danger:** if the PID has been recycled by an unrelated process, `--force` will terminate that process. A fingerprint *mismatch* (recorded start time does not match the live process) is never signalled, even with `--force`; `down` removes that stale file instead. `vibe-debug doctor` detects a stale/unverifiable PID file and prints the applicable recovery instruction.
 - Signal used and PID-file location are unchanged from earlier versions; only the identity gate is new.
 
 For tests or long-running processes that need to re-point tracing:
@@ -376,7 +395,7 @@ reset_tracer()
 init_vibedebug("project-b")
 ```
 
-`reset_tracer()` shuts the current provider down (failures swallowed), clears provider and export-health references so `doctor`-style health reads report the pre-initialisation state, and is a harmless no-op when never initialised or called twice. After reset + re-init, Vibe-Debug's own tracer acquisition (the decorators, `init_vibedebug`'s return value) genuinely uses the **new** provider. Limitation: OpenTelemetry's global provider can be set only once per process, so code that already obtained tracers via `trace.get_tracer()`, and runtime tracers constructed earlier, keep the first provider.
+Calling `init_vibedebug()` again **without** `reset_tracer()` does not replace the provider: the new project name, endpoint, exporter, and other settings are ignored, the existing provider and span routing stay in effect, and one warning is printed per ignored call (`[vibe-debug] Tracer already initialized; new settings ignored. Call reset_tracer() before re-initializing.`). Always call `reset_tracer()` before reinitialising with different settings. `reset_tracer()` shuts the current provider down (failures swallowed), clears provider and export-health references so `doctor`-style health reads report the pre-initialisation state, and is a harmless no-op when never initialised or called twice. After reset + re-init, Vibe-Debug's own tracer acquisition (the decorators, `init_vibedebug`'s return value) genuinely uses the **new** provider, and Vibe-Debug's own runtime components (universal runtime tracer, I/O interceptor, partial trace builder) resolve the active tracer dynamically per use, so they re-point too — even if constructed before the reset. Limitation: OpenTelemetry's global provider can be set only once per process, so third-party code that already obtained tracers via `trace.get_tracer()` keeps the first provider; Vibe-Debug cannot redirect tracers it has already handed out.
 
 ## Examples
 
@@ -411,12 +430,13 @@ vibe-debug explain --language sw   # Swahili AI explanation
 
 - **Phoenix does not start:** run `vibe-debug doctor`; check the port is free and that `phoenix` is importable in the same environment.
 - **Wrong port / custom port:** set `PHOENIX_HOST`/`PHOENIX_PORT` (or `[tracer] otlp_endpoint`); CLI, MCP, and manager all resolve the same base URL. The dashboard URL changes with the port.
-- **No spans arriving:** confirm Phoenix is healthy (`GET /healthz` on the resolved port), confirm your functions are decorated or their module is under `[watch] modules`, and allow a few seconds for ingestion lag before concluding spans are lost.
+- **No spans arriving:** confirm Phoenix is healthy (`GET /healthz` on the resolved port), confirm your functions are decorated or their module is under `[watch] modules`, and allow a few seconds for ingestion lag before concluding spans are lost. For a just-exported trace, `vibe-debug failures --wait 10` (or `explain --wait 10`) polls instead of returning the first empty result. Check `doctor`'s `Tracing coverage:` section: a configured-but-missing module is listed there.
 - **Proxy errors (`502`, connection through a dead proxy):** Vibe-Debug's own loopback Phoenix calls skip environment proxies automatically; remote Phoenix keeps normal proxy behaviour. For other tooling, set `NO_PROXY=localhost,127.0.0.1`.
-- **Exporter failures:** `vibe-debug doctor`'s `Telemetry export:` line distinguishes "Phoenix unreachable" from "this process failed to export". "No export attempted yet" in a fresh `doctor` process is expected (per-process state).
+- **Exporter failures:** `vibe-debug doctor`'s `Telemetry export:` line distinguishes "Phoenix unreachable" from "export failed". In a fresh `doctor` process the line comes from the persisted `.vibe_export_health.json` snapshot and is labelled with its age, writer PID, and `stale snapshot` when older than an hour — if it still says "no export attempted yet", no process has recorded an export for this project yet.
 - **AI explanation unavailable:** check `MUSE_SPARK_API_KEY` is set in the process environment, `[explainer] enabled` or an explicit `--language` was given, and the configured endpoint/model are reachable. Any failure falls back to the deterministic explanation rather than failing the command.
-- **Invalid AI response / unsupported language:** both fall back deterministically; unsupported languages also print a clear note.
-- **Phoenix will not stop:** if `down` refuses, the recorded PID could not be verified as Phoenix (see lifecycle section). Check for a stale `.vibe_phoenix.pid`; remove the stale Phoenix process manually in that case.
+- **Invalid AI response / unsupported language:** both fall back deterministically; unsupported languages also print a clear note. An AI response citing span names that are not in the submitted evidence is likewise rejected and falls back.
+- **Phoenix will not stop:** if `down` refuses, the recorded PID could not be verified as Phoenix (see lifecycle section). `doctor` prints the recovery instruction for the state it finds. Only if you are sure the recorded PID is the stale Phoenix process, use `vibe-debug down --force` — it warns, names the exact PID, and signals it; if that PID now belongs to an unrelated process, `--force` will kill that process. A fingerprint mismatch is never signalled, even with `--force`.
+- **My prompt is/isn't stored:** prompts are stored by default under the `permissive` profile. To keep them out of Phoenix, set `[redaction] privacy_profile = "strict"` (redacts `prompt`/`messages`/`content`/`input`/`output` by name) or add `prompt` to `[redaction] redact_keys`. If previews look over-redacted under `balanced`/`strict`, pattern false positives (JWT-shaped examples, `sk-`-prefixed identifiers) are the likely cause; drop back to `permissive` or narrow with `redact_keys` only.
 - **API-key safety:** never commit `.env`, never paste keys into config files or issues. If a key may have leaked, rotate it with your provider.
 
 ## Development
@@ -444,18 +464,21 @@ Dependency rule: `pyproject.toml` is the single dependency source (Phoenix and o
 
 ## Known limitations
 
-- Export health is per-process; a fresh `doctor` cannot see another process's exporter state.
-- Redaction is key-name-based only: free-text secrets under non-sensitive keys are not detected, and some positional-argument shapes (`*args`, unknown signatures) cannot be key-matched. `prompt` redaction is opt-in via config.
-- After `reset_tracer()`, the OpenTelemetry global provider still points at the first provider; only Vibe-Debug's own acquisition path switches.
-- PID identity verification is best-effort on some platforms (notably macOS) and unavailable for legacy plain-int PID files; `down` refuses there by design.
-- Phoenix ingestion lag can make very fresh spans briefly invisible to CLI/MCP queries.
-- AI explanations can be wrong (hallucination risk), cost money/latency per request, and depend on external API availability; Swahili quality has been spot-checked, not certified.
-- Timeout enforcement on the default Muse Spark transport at the configured default is not yet confirmed (follow-up).
-- Auto-instrumentation covers configured modules (and, optionally, project functions via `sys.settrace`); it is not a whole-interpreter tracer.
+Each item states what was fixed or mitigated and **what remains true**, with severity (impact if it bites) and practical effect.
+
+- **Export health is recorded per process, but persisted (mitigated).** Severity: low. The in-process health state still belongs to the exporting process, but every recorded outcome is written to `.vibe_export_health.json`, so a fresh `doctor` reports the most recent recorded outcome with its age and writer PID instead of always saying "no export attempted yet". What remains: the snapshot can be stale (labelled stale after one hour), reflects only the last recorded outcome per counter set, and cannot prove a *current* export is succeeding.
+- **Redaction is key-name-based by default (mitigated, not eliminated).** Severity: medium — the main residual privacy risk. Under the default `permissive` profile, free-text secrets under non-sensitive keys are not detected, and `*args`/unknown-signature positionals cannot be key-matched; `prompt` is stored unless configured otherwise. `balanced` adds pattern scanning (Bearer/private-key/JWT/API-key prefixes) and `strict` additionally redacts payload keys, but patterns only catch recognisable shapes: an unrecognisable secret format in free text still reaches Phoenix storage, and pattern scanning false-positives on lookalikes (JWT-shaped examples, `sk-`-prefixed identifiers). No profile makes traces provably secret-free; review sensitive traces before sharing.
+- **Phoenix ingestion lag makes fresh spans briefly invisible (mitigated).** Severity: low. Spans can take seconds to become queryable; `failures`/`explain` accept `--wait <seconds>` to poll (the shared fetch and the MCP bridge's internal fetch accept an equivalent `wait_seconds`, though it is not exposed as an MCP tool argument). What remains: with no wait (the default), an immediate query can legitimately return empty, and two live-Phoenix tests remain intermittently timing-sensitive for the same reason.
+- **AI explanations can be wrong, slow, and cost money (mitigated, not eliminated).** Severity: medium. The configured timeout is now enforced by the HTTP transport (bounded fallback), and responses citing span names outside the submitted evidence are rejected — but citation checking is not fact-checking: a fluent, correctly-citing explanation can still assert a wrong cause. Observed live latency is ~11–13s per call and each explicit explanation is one paid API call. Swahili quality: mocked rendering fully tested, one live response user-reviewed as satisfactory; after the citation-validator correction, a machine-scored live run over 8 synthetic categories × en/sw scored 16/16 (the earlier 5/16 primarily measured the overly strict validator, not the model) — broader quality is still unproven and not certified.
+- **Unverifiable PIDs strand users without `--force` (mitigated).** Severity: low (safe by design; the danger moved to the explicit flag). `down` still refuses unverifiable PIDs by default, and PID identity verification is best-effort on some platforms (notably macOS) and unavailable for legacy plain-int PID files. `vibe-debug down --force` is the intentional recovery, but it transfers the risk to the user: forcing a recycled PID terminates an unrelated process. A fingerprint mismatch is never signalled, even with `--force`. The verify→signal race (PID recycled in the milliseconds between check and signal) cannot be eliminated, only shrunk.
+- **After `reset_tracer()`, handed-out tracers keep the first provider (mitigated for Vibe-Debug's own components).** Severity: low–medium in long-running/test processes. Vibe-Debug's decorators and runtime components now acquire the active tracer dynamically and genuinely re-point after reset + re-init. What remains: OpenTelemetry's global provider can be set only once per process, so third-party code holding tracers from `trace.get_tracer()` keeps exporting through the first provider.
+- **Tracing coverage depends on configuration (mitigated).** Severity: low. `doctor` now reports watched/configured modules, configured-but-missing modules, and observed function names, and works with Phoenix down. What remains: coverage is still configuration-dependent — a function in an unwatched module, or in a process that never enabled tracing, produces no span; `doctor` runs in its own process and can only report configuration and cached observations, not another process's live tracing state.
+- **Silent-failure detection is structural-emptiness only by default (mitigated).** Severity: low. Non-empty-but-wrong results are not flagged unless you opt in per decorator with `silent_if=...` (or `silent_if=len` for Sized results). What remains: without the opt-in, a plausible-looking wrong result looks successful; with it, the predicate is your own judgement call, evaluated under a never-raising guard.
+- **Auto-instrumentation is not a whole-interpreter tracer (unchanged).** Severity: low. It covers configured modules (and, optionally, project functions via `sys.settrace`); library internals and unconfigured code are intentionally skipped.
 
 ## Project status
 
-Implemented and tested: pinned dependencies in `pyproject.toml` (no `requirements.txt`); non-throwing silent-failure detection; redaction + truncation (including a correction pass that closed an independent audit); single Phoenix endpoint resolution; loopback-safe HTTP transport; shared CLI/MCP span fetching; honest export-health reporting; safe Phoenix lifecycle with PID identity verification and `reset_tracer()`; optional Muse Spark explanations in English and Swahili (live-verified once per language). Remaining future work is limited to clarifications and broader live testing noted under Known limitations; no further features are claimed here.
+Implemented and tested: pinned dependencies in `pyproject.toml` (no `requirements.txt`); non-throwing silent-failure detection; redaction + truncation (including a correction pass that closed an independent audit); single Phoenix endpoint resolution; loopback-safe HTTP transport; shared CLI/MCP span fetching; honest export-health reporting; safe Phoenix lifecycle with PID identity verification and `reset_tracer()`; optional Muse Spark explanations in English and Swahili (live-verified once per language). A subsequent limitations pass added: persisted export health, bounded `--wait` span polling, enforced explainer timeout with citation validation, privacy profiles (`permissive`/`balanced`/`strict`), `down --force` stale-PID recovery, `doctor` tracing-coverage diagnostics with dynamic runtime tracers, opt-in `silent_if` predicates, and an 8-category AI evaluation pack (offline-tested; machine-scored live run at 16/16 after the citation-validator correction — the earlier 5/16 primarily measured that validator). Remaining future work is limited to the residual limitations noted under Known limitations; no further features are claimed here.
 
 ## License
 
